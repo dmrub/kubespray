@@ -1,0 +1,27 @@
+---
+- hosts: k8s-cluster:etcd:calico-rr
+  tasks:
+    - name: Backup /etc/fstab
+      copy:
+        src: /etc/fstab
+        dest: /etc/fstab.backup
+        owner: root
+        group: root
+        mode: 0644
+        backup: yes
+      become: yes
+      when: ansible_swaptotal_mb > 0
+
+    - name: Remove swapfile from /etc/fstab
+      mount:
+        name: swap
+        fstype: swap
+        state: absent
+      become: yes
+      ignore_errors: yes
+
+    - name: Disable swap
+      command: swapoff --all
+      ignore_errors: yes
+      become: yes
+      when: ansible_swaptotal_mb > 0
