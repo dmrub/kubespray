@@ -95,3 +95,8 @@ target/
 # virtualenv
 venv/
 ENV/
+
+# config
+/clm-config.ini
+/vars-config.yml
+/vault-config.yml
