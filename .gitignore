@@ -9,6 +9,7 @@ temp
 .tox
 .cache
 *.bak
+*~
 *.tfstate
 *.tfstate.backup
 contrib/terraform/aws/credentials.tfvars
