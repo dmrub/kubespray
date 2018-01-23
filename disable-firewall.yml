@@ -1,0 +1,46 @@
+- hosts: k8s-cluster:etcd:calico-rr
+  become: yes
+  tags:
+    - disable_firewall
+  vars:
+    has_firewalld: false
+    has_rpm: false
+  tasks:
+    - name: Determine if has rpm
+      stat: path=/usr/bin/rpm
+      register: rpm_check
+      changed_when: false
+      always_run: yes
+
+    - name: Set the has_rpm fact
+      set_fact:
+        has_rpm: true
+      when: rpm_check.stat.exists
+
+    - name: Determine if firewalld installed
+      command: "rpm -q firewalld"
+      register: firewalld_check
+      changed_when: false
+      failed_when: false
+      always_run: yes
+      when: has_rpm
+
+    - name: Set the has_firewalld fact
+      set_fact:
+        has_firewalld: true
+      when: (firewalld_check is defined and
+             firewalld_check.rc is defined and
+             firewalld_check.rc == 0)
+
+    - name: Stop firewalld
+      command: systemctl stop firewalld
+      when: has_firewalld
+
+    - name: Disable firewalld
+      command: systemctl disable firewalld
+      when: has_firewalld
+
+    - name: Disable rolekit
+      command: systemctl disable rolekit
+      when: has_firewalld
+      ignore_errors: yes
