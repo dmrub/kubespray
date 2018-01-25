@@ -1,0 +1,17 @@
+- hosts: k8s-cluster:etcd:calico-rr
+  become: yes
+  tags:
+    - k8s-restart
+  tasks:
+
+    - name: Kubelet | reload systemd
+      command: systemctl daemon-reload
+
+    - name: Kubelet | reload kubelet
+      service:
+        name: kubelet
+        state: restarted
+
+    - name: Forcefully delete static pods
+      shell: "docker ps -f name=k8s_{{item}} -q | xargs --no-run-if-empty docker rm -f"
+      with_items: ["kube-apiserver", "kube-scheduler", "kube-controller-manager"]
