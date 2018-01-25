@@ -1,0 +1,11 @@
+- hosts: k8s-cluster:etcd:calico-rr
+  become: yes
+  tags:
+    - k8s-delete-certs
+  tasks:
+    - name: Delete generated kubernetes certificates
+      file:
+        state: absent
+        path: "{{ kube_cert_dir }}"
+      ignore_errors: yes
+      
