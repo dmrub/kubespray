@@ -1,0 +1,5 @@
+- hosts: kube-master[0]
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  roles:
+    - { role: kubespray-defaults}
+    - { role: kubernetes-apps/rotate_tokens, tags: rotate_tokens }
