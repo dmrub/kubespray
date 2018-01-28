@@ -12,11 +12,6 @@ run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/disable-firewall.yml" "$@"
 
 run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/disable-swap.yml" "$@"
 
-ansible -i "$ANSIBLE_INVENTORY" \
-        --user "$ANSIBLE_REMOTE_USER" \
-        --extra-vars @"$CLM_VAULT_FILE" \
-        --extra-vars @"$CLM_VARS_FILE" \
-        all \
-        -m setup
+run-ansible all -m setup
 
 run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/cluster.yml" --become --become-user=root "$@"
