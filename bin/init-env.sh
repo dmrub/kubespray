@@ -73,6 +73,20 @@ ansible_playbook() {
     ansible-playbook -i "$@"
 }
 
+run-ansible() {
+    echo "+ ansible -i \"$ANSIBLE_INVENTORY\" \
+--user \"$ANSIBLE_REMOTE_USER\" \
+--extra-vars @\"$CLM_VAULT_FILE\" \
+--extra-vars @\"$CLM_VARS_FILE\" \
+$*"
+
+    ansible -i "$ANSIBLE_INVENTORY" \
+            --user "$ANSIBLE_REMOTE_USER" \
+            --extra-vars @"$CLM_VAULT_FILE" \
+            --extra-vars @"$CLM_VARS_FILE" \
+            "$@"
+}
+
 run-ansible-playbook() {
     check-config
     check-inventory "$ANSIBLE_INVENTORY"
