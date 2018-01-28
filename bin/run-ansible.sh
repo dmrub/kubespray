@@ -5,12 +5,4 @@ THIS_DIR=$(dirname "$( readlink -f "${BASH_SOURCE}" 2>/dev/null || \
 
 source "$THIS_DIR/init-env.sh"
 
-echo ansible -i "$ANSIBLE_INVENTORY" \
-     --user "$ANSIBLE_REMOTE_USER" \
-     "$@"
-
-ansible -i "$ANSIBLE_INVENTORY" \
-        --user "$ANSIBLE_REMOTE_USER" \
-        --extra-vars @"$CLM_VAULT_FILE" \
-        --extra-vars @"$CLM_VARS_FILE" \
-        "$@"
+run-ansible "$@"
