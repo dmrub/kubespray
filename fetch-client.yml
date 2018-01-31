@@ -1,0 +1,27 @@
+- hosts: kube-master
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  tags:
+    - client
+  roles:
+    - { role: kubespray-defaults}
+  vars_files:
+    - roles/kubernetes/client/defaults/main.yml
+  tasks:
+
+    - name: Copy admin kubeconfig to ansible host
+      fetch:
+        src: "{{ kube_config_dir }}/admin.conf"
+        dest: "{{ artifacts_dir }}/admin.conf"
+        flat: yes
+        validate_checksum: no
+      run_once: yes
+    
+    - name: Copy kubectl binary to ansible host
+      fetch:
+        src: "{{ bin_dir }}/kubectl"
+        dest: "{{ artifacts_dir }}/kubectl"
+        flat: yes
+        validate_checksum: no
+      become: no
+      run_once: yes
