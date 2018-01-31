@@ -1,0 +1,42 @@
+- hosts: etcd
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  tags:
+    - etcd
+  roles:
+    - { role: kubespray-defaults}
+  vars:
+    etcd_backup_dir: "./etcd_backup"
+  vars_files:
+    - roles/etcd/defaults/main.yml
+  handlers:
+    - import_tasks: roles/etcd/handlers/backup.yml
+  tasks:
+
+    - import_tasks: roles/etcd/tasks/set_cluster_health.yml
+
+    - name: Backup all etcd data
+      command: /bin/true
+      notify:
+        - Backup etcd data
+
+    - meta: flush_handlers
+
+    - debug:
+        var: etcd_backup_directory
+
+    - name: Create etcd backup tarball
+      command: "tar -cvzf /tmp/etcd-backup-{{ inventory_hostname }}.tar.gz -C {{ etcd_backup_directory }} ."
+
+    - name: Copy etcd backup tarball to ansible host
+      fetch:
+        src: "/tmp/etcd-backup-{{ inventory_hostname }}.tar.gz"
+        dest: "{{ etcd_backup_dir }}/etcd-backup-{{ inventory_hostname }}.tar.gz"
+        flat: yes
+        validate_checksum: no
+      become: no
+      
+    - name: Remove etcd backup tarball
+      file:
+        path: "/tmp/etcd-backup-{{ inventory_hostname }}.tar.gz"
+        state: absent
