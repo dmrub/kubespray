@@ -1,0 +1,12 @@
+---
+- hosts: localhost
+  gather_facts: False
+  roles:
+    - { role: kubespray-defaults}
+    - { role: bastion-ssh-config, tags: ["localhost", "bastion"]}
+
+- hosts: kube-master[0]
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  roles:
+    - { role: kubespray-defaults}
+    - { role: kubernetes-apps, tags: apps }
