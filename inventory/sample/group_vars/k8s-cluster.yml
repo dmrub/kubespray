@@ -214,6 +214,9 @@ cert_manager_enabled: false
 # Add Persistent Volumes Storage Class for corresponding cloud provider ( OpenStack is only supported now )
 persistent_volumes_enabled: false
 
+# Heapster monitoring
+cluster_monitoring_enabled: false
+
 # Make a copy of kubeconfig on the host that runs Ansible in {{ inventory_dir }}/artifacts
 # kubeconfig_localhost: false
 # Download kubectl onto the host that runs Ansible in {{ bin_dir }}

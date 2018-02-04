@@ -1,0 +1,45 @@
+---
+
+- name: Kubernetes Apps | Create cluster_monitoring addon dir
+  file:
+    path: "{{ kube_config_dir }}/addons/cluster_monitoring"
+    owner: root
+    group: root
+    mode: 0755
+    recurse: true
+
+# - name: Kubernetes Apps | Delete old cluster_monitoring resources
+#   kube:
+#     name: "kubernetes-dashboard"
+#     kubectl: "{{bin_dir}}/kubectl"
+#     resource: "{{ item }}"
+#     state: absent
+#   with_items:
+#     - 'ClusterRoleBinding'
+#   tags:
+#     - upgrade
+
+- name: Kubernetes Apps | Create cluster_monitoring manifests
+  template:
+    src: "{{ item.file }}.j2"
+    dest: "{{ kube_config_dir }}/addons/cluster_monitoring/{{ item.file }}"
+  with_items:
+    - { name: heapster-binding, file: heapster-rbac.yaml, type: clusterrolebinding }
+    - { name: monitoring-grafana, file: grafana-service.yaml, type: service }
+    - { name: heapster-controller, file: heapster-controller.yaml, type: deployment }
+    - { name: heapster, file: heapster-service.yaml, type: service }
+    - { name: monitoring-influxdb-grafana-v4, file: influxdb-grafana-controller.yaml, type: deployment }
+    - { name: monitoring-influxdb, file: influxdb-service.yaml, type: service }
+  register: cluster_monitoring_manifests
+  when: inventory_hostname == groups['kube-master'][0]
+
+- name: Kubernetes Apps | Apply manifests
+  kube:
+    name: "{{ item.item.name }}"
+    namespace: "{{ system_namespace }}"
+    kubectl: "{{ bin_dir }}/kubectl"
+    resource: "{{ item.item.type }}"
+    filename: "{{ kube_config_dir }}/addons/cluster_monitoring/{{ item.item.file }}"
+    state: "latest"
+  with_items: "{{ cluster_monitoring_manifests.results }}"
+  when: inventory_hostname == groups['kube-master'][0]

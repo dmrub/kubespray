@@ -40,3 +40,8 @@ dependencies:
     tags:
       - apps
       - persistent_volumes
+  - role: kubernetes-apps/cluster_monitoring
+    when: cluster_monitoring_enabled
+    tags:
+      - apps
+      - cluster_monitoring
