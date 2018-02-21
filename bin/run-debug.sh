@@ -58,14 +58,6 @@ while [[ "$1" == "-"* ]]; do
     esac
 done
 
-echo ansible -i "$ANSIBLE_INVENTORY" \
-     --user "$ANSIBLE_REMOTE_USER" \
-     --extra-vars @"$CLM_VAULT_FILE" \
-     --extra-vars @"$CLM_VARS_FILE" \
-     "$HOST_PATTERN" $BECOME "${ANSIBLE_OPTS[@]}" -m debug --args=msg="$*"
 
-ansible -i "$ANSIBLE_INVENTORY" \
-        --user "$ANSIBLE_REMOTE_USER" \
-        --extra-vars @"$CLM_VAULT_FILE" \
-        --extra-vars @"$CLM_VARS_FILE" \
-        "$HOST_PATTERN" $BECOME "${ANSIBLE_OPTS[@]}" -m debug --args=msg="$*"
+run-ansible \
+    "$HOST_PATTERN" $BECOME "${ANSIBLE_OPTS[@]}" -m debug --args=msg="$*"

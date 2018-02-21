@@ -97,6 +97,6 @@ venv/
 ENV/
 
 # config
-/clm-config.ini
-/vars-config.yml
-/vault-config.yml
+/config.yml
+/ansible-vars.yml
+/ansible-vault.yml
