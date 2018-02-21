@@ -13,12 +13,16 @@ usage() {
     echo "  -p, --host-pattern=        Ansible host pattern"
     echo "                             (default: $PATTERN)"
     echo "  -b, --become               run operations with become"
+    echo "  -v,-vv,-vvv,-vvvv          run in verbose mode"
+    echo "      --verbose"
     echo "      --help                 Display this help and exit"
     echo "      --                     End of options"
 }
 
 HOST_PATTERN=all
 BECOME=
+ANSIBLE_OPTS=()
+
 
 while [[ "$1" == "-"* ]]; do
     case "$1" in
@@ -32,6 +36,10 @@ while [[ "$1" == "-"* ]]; do
             ;;
         -b|--become)
             BECOME=--become
+            shift
+            ;;
+        -v|-vv|-vvv|-vvvv|--verbose)
+            ANSIBLE_OPTS+=("$1")
             shift
             ;;
         --help)
@@ -62,9 +70,6 @@ if [ ! -e "$SCRIPT" ]; then
     fatal "Not a file: $SCRIPT"
 fi
 
-ansible -i "$ANSIBLE_INVENTORY" \
-        --user "$ANSIBLE_REMOTE_USER" \
-        --extra-vars @"$CLM_VAULT_FILE" \
-        --extra-vars @"$CLM_VARS_FILE" \
+run-ansible \
         "$HOST_PATTERN" $BECOME "${ANSIBLE_OPTS[@]}" \
         -m script --args "'$SCRIPT' $@"

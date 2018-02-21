@@ -1,18 +1,18 @@
 ROOT_DIR=$THIS_DIR/..
-CLM_CONFIG_FILE=${CLM_CONFIG_FILE:-$ROOT_DIR/clm-config.ini}
-CLM_CONFIG_FILE_DIR=$(dirname "$CLM_CONFIG_FILE")
+CFG_CONFIG_FILE=${CFG_CONFIG_FILE:-$ROOT_DIR/config.yml}
+CFG_CONFIG_FILE_DIR=$(dirname "$CFG_CONFIG_FILE")
 
 ANSIBLE_DIR=$ROOT_DIR
 ANSIBLE_PLAYBOOKS_DIR=$ANSIBLE_DIR
 ANSIBLE_INVENTORY_DIR=$ROOT_DIR/inventory
 ANSIBLE_INVENTORY=$ANSIBLE_INVENTORY_DIR/inventory.cfg
 
-CLM_CONFIG_DIR=${CLM_CONFIG_DIR:-~/.ansible}
-CLM_VAULT_FILE=${CLM_VAULT_FILE:-$ROOT_DIR/vault-config.yml}
-CLM_VARS_FILE=${CLM_VARS_FILE:-$ROOT_DIR/vars-config.yml}
+CFG_CONFIG_DIR=${CFG_CONFIG_DIR:-~/.ansible}
+CFG_VAULT_FILE=${CFG_VAULT_FILE:-$ROOT_DIR/vault-config.yml}
+CFG_VARS_FILE=${CFG_VARS_FILE:-$ROOT_DIR/vars-config.yml}
 
 export ANSIBLE_PRIVATE_KEY_FILE=${ANSIBLE_PRIVATE_KEY_FILE:-~/.ssh/cluster_id_rsa}
-export ANSIBLE_VAULT_PASSWORD_FILE=${ANSIBLE_VAULT_PASSWORD_FILE:-${CLM_CONFIG_DIR}/vault_pass.txt}
+export ANSIBLE_VAULT_PASSWORD_FILE=${ANSIBLE_VAULT_PASSWORD_FILE:-${CFG_CONFIG_DIR}/vault_pass.txt}
 export ANSIBLE_CONFIG=$ANSIBLE_DIR/ansible.cfg
 export ANSIBLE_FILTER_PLUGINS=$ANSIBLE_DIR/filter_plugins
 export ANSIBLE_ROLES_PATH=$ANSIBLE_DIR/roles
@@ -33,10 +33,10 @@ abspath() {
 
 print-info() {
     echo "Current Configuration:"
-    echo "Configuration file:            $(abspath "$CLM_CONFIG_FILE")"
+    echo "Configuration file:            $(abspath "$CFG_CONFIG_FILE")"
     echo
     echo "Ansible inventory file:        $(abspath "$ANSIBLE_INVENTORY")"
-    echo "Config directory:              $(abspath "$CLM_CONFIG_DIR")"
+    echo "Config directory:              $(abspath "$CFG_CONFIG_DIR")"
     echo "Ansible vault password file:   $(abspath "$ANSIBLE_VAULT_PASSWORD_FILE")"
     echo "Ansible remote user:           $ANSIBLE_REMOTE_USER"
     echo "Ansible private SSH key file:  $(abspath "$ANSIBLE_PRIVATE_KEY_FILE")"
@@ -44,7 +44,7 @@ print-info() {
 }
 
 check-config() {
-    if [[ ! -d "$CLM_CONFIG_DIR" ]]; then
+    if [[ ! -d "$CFG_CONFIG_DIR" ]]; then
         fatal "Configuration directory does not exist, run $(abspath "$THIS_DIR/configure.sh")"
     fi
     if [[ ! -e "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
@@ -76,14 +76,14 @@ ansible_playbook() {
 run-ansible() {
     echo "+ ansible -i \"$ANSIBLE_INVENTORY\" \
 --user \"$ANSIBLE_REMOTE_USER\" \
---extra-vars @\"$CLM_VAULT_FILE\" \
---extra-vars @\"$CLM_VARS_FILE\" \
+--extra-vars @\"$CFG_VAULT_FILE\" \
+--extra-vars @\"$CFG_VARS_FILE\" \
 $*"
 
     ansible -i "$ANSIBLE_INVENTORY" \
             --user "$ANSIBLE_REMOTE_USER" \
-            --extra-vars @"$CLM_VAULT_FILE" \
-            --extra-vars @"$CLM_VARS_FILE" \
+            --extra-vars @"$CFG_VAULT_FILE" \
+            --extra-vars @"$CFG_VARS_FILE" \
             "$@"
 }
 
@@ -92,12 +92,12 @@ run-ansible-playbook() {
     check-inventory "$ANSIBLE_INVENTORY"
     echo "+ ansible-playbook --inventory \"$ANSIBLE_INVENTORY\" \
 --user \"$ANSIBLE_REMOTE_USER\" \
---extra-vars @\"$CLM_VAULT_FILE\" \
---extra-vars @\"$CLM_VARS_FILE\" $*"
+--extra-vars @\"$CFG_VAULT_FILE\" \
+--extra-vars @\"$CFG_VARS_FILE\" $*"
     ansible-playbook --inventory "$ANSIBLE_INVENTORY" \
                      --user "$ANSIBLE_REMOTE_USER" \
-                     --extra-vars @"$CLM_VAULT_FILE" \
-                     --extra-vars @"$CLM_VARS_FILE" \
+                     --extra-vars @"$CFG_VAULT_FILE" \
+                     --extra-vars @"$CFG_VARS_FILE" \
                      "$@"
 }
 
@@ -130,15 +130,15 @@ read-config-file() {
 
 eval "$("$THIS_DIR/configure.py" --shell-config)"
 
-#if [[ -e "$CLM_CONFIG_FILE" ]]; then
-#    read-config-file "$CLM_CONFIG_FILE" "CFG_"
+#if [[ -e "$CFG_CONFIG_FILE" ]]; then
+#    read-config-file "$CFG_CONFIG_FILE" "CFG_"
 #    export ANSIBLE_REMOTE_USER=${CFG_ANSIBLE_REMOTE_USER:-$ANSIBLE_REMOTE_USER}
 #    export ANSIBLE_PRIVATE_KEY_FILE=${CFG_ANSIBLE_PRIVATE_KEY_FILE:-$ANSIBLE_PRIVATE_KEY_FILE}
 #    export ANSIBLE_INVENTORY=${CFG_ANSIBLE_INVENTORY:-$ANSIBLE_INVENTORY}
 #    if [[ "$ANSIBLE_INVENTORY" != /* ]]; then
-#        ANSIBLE_INVENTORY=$(abspath "${CLM_CONFIG_FILE_DIR}/${ANSIBLE_INVENTORY}")
+#        ANSIBLE_INVENTORY=$(abspath "${CFG_CONFIG_FILE_DIR}/${ANSIBLE_INVENTORY}")
 #    fi
 #    if [[ "$ANSIBLE_PRIVATE_KEY_FILE" != /* ]]; then
-#        ANSIBLE_PRIVATE_KEY_FILE=$(abspath "${CLM_CONFIG_FILE_DIR}/${ANSIBLE_PRIVATE_KEY_FILE}")
+#        ANSIBLE_PRIVATE_KEY_FILE=$(abspath "${CFG_CONFIG_FILE_DIR}/${ANSIBLE_PRIVATE_KEY_FILE}")
 #    fi
 #fi

@@ -124,9 +124,7 @@ if [ "$1" != "--remote" ]; then
     THIS_SCRIPT="$( readlink -f "${BASH_SOURCE}" 2>/dev/null || \
   python -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE}" )"
 
-    ansible -i "$ANSIBLE_INVENTORY" \
-            --extra-vars @"$CLM_VAULT_FILE" \
-            --extra-vars @"$CLM_VARS_FILE" \
+    run-ansible \
             "$HOST_PATTERN" \
             --become \
             -m script \
