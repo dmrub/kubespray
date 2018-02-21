@@ -5,8 +5,5 @@ THIS_DIR=$(dirname "$( readlink -f "${BASH_SOURCE}" 2>/dev/null || \
 
 source "$THIS_DIR/init-env.sh"
 
-ansible_playbook "$ANSIBLE_INVENTORY" \
-                 --user "$ANSIBLE_REMOTE_USER" \
-                 --extra-vars @"$CLM_VAULT_FILE" \
-                 --extra-vars @"$CLM_VARS_FILE" \
-                 "$ANSIBLE_PLAYBOOKS_DIR/install-ssh-auth.yml" "$@"
+run-ansible-playbook \
+    "$ANSIBLE_PLAYBOOKS_DIR/install-ssh-auth.yml" "$@"
