@@ -20,6 +20,8 @@ run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/cluster.yml" \
 #                     --skip-tags=download \
 #                     --become --become-user=root "$@"
 
+run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/restart-cluster.yml" "$@"
+
 run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/rotate-tokens.yml" "$@"
 
 run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/restart-cluster.yml" "$@"
