@@ -142,11 +142,8 @@ if [[ "$1" != "--script" ]]; then
 
     THIS_SCRIPT="$(readlink -f "$BASH_SOURCE")"
 
-    ansible -i "$ANSIBLE_INVENTORY" \
-            --user "$ANSIBLE_REMOTE_USER" \
-            --extra-vars @"$CLM_VAULT_FILE" \
-            --extra-vars @"$CLM_VARS_FILE" \
-            "$HOST_PATTERN" --become -m script --args "$THIS_SCRIPT --script $DEV $PARTDEV $@"
+    run-ansible \
+        "$HOST_PATTERN" --become -m script --args "$THIS_SCRIPT --script $DEV $PARTDEV $@"
 
 else
     # Remote code
