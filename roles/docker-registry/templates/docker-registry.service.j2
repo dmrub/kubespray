@@ -1,0 +1,16 @@
+[Unit]
+Description=Docker Registry Server
+Requires=docker.service
+After=docker.service
+
+[Service]
+Restart=always
+Environment="DOCKER_REGISTRY_PORT={{ docker_registry_port }}"
+Environment="DOCKER_REGISTRY_NAME={{ docker_registry_name }}"
+Environment="DOCKER_REGISTRY_IMAGE={{ docker_registry_image }}"
+Environment="DOCKER_REGISTRY_CONFIG={{ docker_registry_config }}"
+ExecStart={{ docker_registry_script_dir }}/docker-registry.sh start
+ExecStop={{ docker_registry_script_dir }}/docker-registry.sh stop
+
+[Install]
+WantedBy=multi-user.target
