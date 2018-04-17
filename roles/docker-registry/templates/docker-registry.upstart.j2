@@ -1,0 +1,12 @@
+description "Docker Registry Server"
+
+start on filesystem and started docker
+stop on runlevel [!2345]
+respawn
+
+env DOCKER_REGISTRY_PORT={{ docker_registry_port }}
+env DOCKER_REGISTRY_NAME={{ docker_registry_name }}
+env DOCKER_REGISTRY_IMAGE={{ docker_registry_image }}
+env DOCKER_REGISTRY_CONFIG={{ docker_registry_config }}
+
+exec {{ docker_registry_script_dir }}/docker-registry.sh start

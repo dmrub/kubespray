@@ -1,0 +1,11 @@
+docker_registry_config_dir: /etc/docker-registry
+
+docker_registry_script_dir: "{{ docker_registry_config_dir }}/scripts"
+
+docker_registry_port: 5000
+
+docker_registry_name: registry
+
+docker_registry_image: registry:2
+
+docker_registry_config: "{{ docker_registry_config_dir }}/docker-registry-config.yml"
