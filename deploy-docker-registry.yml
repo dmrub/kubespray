@@ -1,0 +1,8 @@
+---
+- name: Deploy docker registry
+  hosts: docker-registry
+  become: yes
+  roles:
+    - docker-registry
+  tags:
+    - docker-registry
