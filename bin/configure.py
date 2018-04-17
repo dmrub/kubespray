@@ -136,6 +136,16 @@ EXPORT_SHELL_VARS = {
     'ANSIBLE_PRIVATE_KEY_FILE': PATH_MOD,
 }
 
+PATH_VARS = {'ANSIBLE_CONFIG', 'ANSIBLE_INVENTORY', 'ANSIBLE_ROLES_PATH', 'CFG_VAULT_FILE', 'CFG_VARS_FILE',
+             'ANSIBLE_FILTER_PLUGINS', 'ANSIBLE_VAULT_PASSWORD_FILE', 'ANSIBLE_PRIVATE_KEY_FILE'}
+
+def fix_path_vars(vars):
+    dirname = os.path.dirname(CONFIG_VARS_FILE)
+    for var in PATH_VARS:
+        val = vars.get(var)
+        if val and not os.path.isabs(val):
+            vars[var] = os.path.join(dirname, val)
+    return vars
 
 class Config(object):
 
@@ -149,6 +159,7 @@ class Config(object):
             'CFG_VAULT_FILE': CFG_VAULT_FILE,
             'CFG_VARS_FILE': CFG_VARS_FILE
         })
+        fix_path_vars(self.config_vars)
         # save initial state
         self._init_config_vars = copy.deepcopy(self.config_vars)
 
