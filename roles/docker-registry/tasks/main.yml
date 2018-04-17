@@ -1,0 +1,51 @@
+---
+- name: Assures required directories exist
+  file: path={{ item }} state=directory
+  with_items:
+    - "{{ docker_registry_config_dir }}"
+    - "{{ docker_registry_script_dir }}"
+
+- name: Copy local docker-registry.sh
+  notify:
+    - reload and restart docker registry
+  copy:
+    src: docker-registry.sh
+    dest: "{{ docker_registry_script_dir }}/docker-registry.sh"
+    mode: 0755
+
+- name: Copy local docker registry config.yml
+  notify:
+    - reload and restart docker registry
+  copy:
+    src: docker-registry-config.yml
+    dest: "{{ docker_registry_config }}"
+
+- name: Install docker registry service
+  template:
+    src: docker-registry.service.j2
+    dest: /etc/systemd/system/docker-registry.service
+    backup: yes
+  notify:
+    - reload and restart docker registry
+
+- name: Enable docker registry
+  service: name=docker-registry enabled=yes
+  notify:
+    - reload and restart docker registry
+
+- name: Open firewalld TCP ports for docker registry
+  firewalld: port={{ item }}/tcp permanent=false state=enabled zone={{ firewalld_zone }}
+  # in case this is also a node where firewalld turned off
+  ignore_errors: yes
+  with_items: "{{ docker_registry_port }}"
+  when: docker_registry_port is defined
+
+- name: Save firewalld TCP ports for docker registry
+  firewalld: port={{ item }}/tcp permanent=true state=enabled zone={{ firewalld_zone }}
+  # in case this is also a node where firewalld turned off
+  ignore_errors: yes
+  with_items: "{{ docker_registry_port }}"
+  when: docker_registry_port is defined
+
+- name: Restart docker registry
+  service: name=docker-registry state=restarted
