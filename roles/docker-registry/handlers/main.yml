@@ -1,0 +1,8 @@
+---
+- name: reload and restart docker registry
+  command: systemctl --system daemon-reload
+  notify:
+    - restart docker registry
+
+- name: restart docker registry
+  service: name=docker-registry state=restarted
