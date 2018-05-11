@@ -7,4 +7,4 @@ set -e
 
 NODE_PORTS=( $($THIS_DIR/kubectl.sh get svc netchecker-service -o go-template  --template '{{ range .spec.ports}}{{ .nodePort }} {{ end }}') )
 
-$THIS_DIR/run-ansible.sh all -m uri -a "url=http://localhost:${NODE_PORTS[0]}/api/v1/connectivity_check return_content=yes"
+$THIS_DIR/run-ansible.sh all -m uri -a "url=http://127.0.0.1:${NODE_PORTS[0]}/api/v1/connectivity_check return_content=yes"
