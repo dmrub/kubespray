@@ -1,0 +1,36 @@
+- hosts: 127.0.0.1
+  connection: local
+  gather_facts: false
+  vars:
+    - dest_dir: "."
+  tasks:
+    - name: Create ssh login script in run-ssh.sh
+      copy:
+        content: |
+          #!/bin/bash
+          set -xe
+          ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i '{{ansible_ssh_private_key_file}}' -l '{{ansible_user}}' {{ansible_ssh_common_args}} "$@"
+        dest: "{{ dest_dir }}/run-ssh.sh"
+        mode: 0755
+    - name: Create scp script in run-scp.sh
+      copy:
+        content: |
+          #!/bin/bash
+          set -xe
+          scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i '{{ansible_ssh_private_key_file}}' -o User='{{ansible_user}}' {{ansible_ssh_common_args}} "$@"
+        dest: "{{ dest_dir }}/run-scp.sh"
+        mode: 0755
+    - name: Set remote shell var
+      set_fact:
+        rsh: "ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i '{{ansible_ssh_private_key_file}}' -l '{{ansible_user}}' {{ansible_ssh_common_args}}"
+    - name: Create rsync script in run-rsync.sh
+      copy:
+        content: |
+          #!/bin/bash
+          RSH={{ rsh | quote }}
+          set -xe
+          rsync -avhe "$RSH" --stats --progress "$@"
+        dest: "{{ dest_dir }}/run-rsync.sh"
+        mode: 0755
+    - debug:
+        msg: "Scripts are in directory {{ dest_dir }}"
