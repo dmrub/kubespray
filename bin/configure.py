@@ -1,21 +1,23 @@
 #!/usr/bin/env python
 from __future__ import print_function
-import logging
-import sys
+
 import argparse
-import subprocess
-import tempfile
-import os
 import copy
-import os.path
-import string
+import getpass
+import logging
 import random
 import readline
-import getpass
+import shutil
+import string
+import subprocess
+import sys
+import tempfile
+import hashlib
+import os.path
+from six import iteritems
 from six.moves import input
 from six.moves import shlex_quote
 from yaml import load, dump
-from six import iteritems
 
 try:
     from subprocess import DEVNULL  # py3k
@@ -29,7 +31,7 @@ try:
 except ImportError:
     from yaml import Loader, Dumper
 
-logger = logging.getLogger()
+LOG = logging.getLogger(__name__)
 
 # Default configuration
 HOME = os.path.expanduser('~')
@@ -79,7 +81,7 @@ def backup_file(path):
         bak_rpath = rpath + "~"
         while os.path.exists(bak_rpath):
             bak_rpath += "~"
-        logger.info('Backup file %s to file %s', rpath, bak_rpath)
+        LOG.info('Backup file %s to file %s', rpath, bak_rpath)
         os.rename(rpath, bak_rpath)
 
 
@@ -89,9 +91,9 @@ def load_config(file_name, defaults=None):
         try:
             with open(file_name, 'r') as fd:
                 config_vars = load(fd, Loader=Loader)
-            logger.info('Loaded configuration variables from file: %s', file_name)
+            LOG.info('Loaded configuration variables from file: %s', file_name)
         except Exception:
-            logger.exception('Could not load configuration variables from file: %s', file_name)
+            LOG.exception('Could not load configuration variables from file: %s', file_name)
     if defaults:
         for k, v in iteritems(defaults):
             if k not in config_vars:
@@ -104,15 +106,15 @@ def save_config(file_name, config_vars, do_backup=True):
         try:
             backup_file(file_name)
         except Exception:
-            logger.exception('Could not make backup from file: %s', file_name)
+            LOG.exception('Could not make backup from file: %s', file_name)
             return False
 
     try:
         with open(file_name, 'w') as fd:
             fd.write(dump(config_vars, Dumper=Dumper))
-        logger.info('Saved vars to file: %s', file_name)
+        LOG.info('Saved vars to file: %s', file_name)
     except Exception:
-        logger.exception('Could not save vars to file: %s', file_name)
+        LOG.exception('Could not save vars to file: %s', file_name)
         return False
 
     return True
@@ -139,6 +141,14 @@ EXPORT_SHELL_VARS = {
 PATH_VARS = {'ANSIBLE_CONFIG', 'ANSIBLE_INVENTORY', 'ANSIBLE_ROLES_PATH', 'CFG_VAULT_FILE', 'CFG_VARS_FILE',
              'ANSIBLE_FILTER_PLUGINS', 'ANSIBLE_VAULT_PASSWORD_FILE', 'ANSIBLE_PRIVATE_KEY_FILE'}
 
+
+def fix_path(path, root_dir):
+    if path and not os.path.isabs(path):
+        return os.path.join(root_dir, path)
+    else:
+        return path
+
+
 def fix_path_vars(vars):
     dirname = os.path.dirname(CONFIG_VARS_FILE)
     for var in PATH_VARS:
@@ -147,9 +157,13 @@ def fix_path_vars(vars):
             vars[var] = os.path.join(dirname, val)
     return vars
 
+
 class Config(object):
 
-    def __init__(self):
+    def __init__(self, debug_mode=False):
+        self.debug_mode = debug_mode
+
+        # load configuration variables
         self.config_vars = load_config(CONFIG_VARS_FILE, defaults={
             'ANSIBLE_INVENTORY': ANSIBLE_INVENTORY,
             'ANSIBLE_VAULT_PASSWORD_FILE': ANSIBLE_VAULT_PASSWORD_FILE,
@@ -163,9 +177,113 @@ class Config(object):
         # save initial state
         self._init_config_vars = copy.deepcopy(self.config_vars)
 
+        # load ansible variables
         self.ansible_vars = load_config(self.get_vars_file(), defaults={})
+        self.ansible_vars.pop('ansible_become_pass', None)
+
         # save initial state
         self._init_ansible_vars = copy.deepcopy(self.ansible_vars)
+
+        # compute secure hash for caching
+        shash = hashlib.sha256()
+        shash.update(repr(self.ansible_vars))
+        ansible_vars_hash = shash.hexdigest()
+        del shash
+        #print(shash.hexdigest(), file=sys.stderr) # DEBUG
+
+        ansible_vars_cache_fn = self.get_vars_file() + ".cache"
+
+        self.ansible_vars_interpolated = None
+
+        if os.path.exists(ansible_vars_cache_fn):
+            try:
+                with open(ansible_vars_cache_fn, 'r') as fd:
+                    cache = load(fd, Loader=Loader)
+                cache_hash = cache["hash"]
+                cache_vars = cache["vars"]
+                if cache_hash == ansible_vars_hash:
+                    self.ansible_vars_interpolated = cache_vars
+                    LOG.info('Loaded cached variables from file: %s', ansible_vars_cache_fn)
+                else:
+                    LOG.info('Cache from file %s is invalid', ansible_vars_cache_fn)
+                del cache
+
+            except Exception:
+                LOG.exception('Could not load cached variables from file: %s', ansible_vars_cache_fn)
+
+        # Compute interpolated variables
+
+        if self.ansible_vars_interpolated is None:
+            # By default interpolated variables are equal to non-interpolated
+            self.ansible_vars_interpolated = self.ansible_vars
+            ansible_var_names = set(self.ansible_vars.keys())
+            ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
+                                      'ansible_private_key_file',
+                                      'ansible_ssh_private_key_file',
+                                      ])
+            ansible_var_names.difference_update(['ansible_become_pass'])
+            indent = "      "
+            vars_struct = ""
+            for vn in ansible_var_names:
+                vars_struct += indent + vn + ': "{{ lookup(\'vars\', \'' + vn + '\', default=\'\') }}"\n'
+            vars_tmpl = """
+- hosts: 127.0.0.1
+  connection: local
+  gather_facts: false
+  vars:
+    all_vars:
+%s
+  pre_tasks:
+    - name: Verify Ansible version
+      assert:
+        that: "ansible_version.full is version('2.5', '>=')"
+        msg: "You must update Ansible to at least 2.5"
+  tasks:
+    - name: Store message to file
+      copy:
+        content: "{{ all_vars | to_yaml }}"
+        dest: "{{ CFG_DEST_FILE }}"
+                                """ % (vars_struct,)
+
+            temp_dir = tempfile.mkdtemp(prefix='cmconf-')
+            get_vars_playbook_fn = os.path.join(temp_dir, 'get_vars_pb.yaml')
+            vars_fn = os.path.join(temp_dir, 'vars.json')
+            try:
+                with open(get_vars_playbook_fn, 'w') as fd:
+                    fd.write(vars_tmpl)
+
+                args = ['ansible-playbook',
+                        '-i', self.get_ansible_inventory(),
+                        '--vault-password-file', self.get_ansible_vault_password_file(),
+                        '--extra-vars', '@' + self.get_vault_file(),
+                        '--extra-vars', '@' + self.get_vars_file(),
+                        '--extra-vars', 'CFG_DEST_FILE={}'.format(shlex_quote(vars_fn)),
+                        get_vars_playbook_fn
+                        ]
+                LOG.debug("Interpolate loaded variables: %s", " ".join(args))
+                save_cache = False
+                try:
+                    subprocess.check_call(args, stdout=DEVNULL if not self.debug_mode else sys.stderr)
+                    self.ansible_vars_interpolated = load_config(vars_fn, defaults=self.ansible_vars)
+                    save_cache = True
+                except subprocess.CalledProcessError as e:
+                    LOG.exception("Could not interpolate variables")
+                if save_cache:
+                    try:
+                        # Save variables to cache
+                        cache = {
+                            "hash": ansible_vars_hash,
+                            "vars": self.ansible_vars_interpolated
+                        }
+
+                        with open(ansible_vars_cache_fn, 'w') as fd:
+                            fd.write(dump(cache, Dumper=Dumper))
+                        LOG.info('Saved interpolated variables to cache file: %s', ansible_vars_cache_fn)
+                    except Exception:
+                        LOG.exception("Could not save interpolated variables to cache")
+
+            finally:
+                shutil.rmtree(temp_dir)
 
     @property
     def config_vars_changed(self):
@@ -177,14 +295,14 @@ class Config(object):
 
     def save(self, do_backup=False):
         if self.config_vars_changed:
-            logger.info('Configuration changed')
+            LOG.info('Configuration changed')
             save_config(CONFIG_VARS_FILE, self.config_vars, do_backup=do_backup)
         if self.ansible_vars_changed:
-            logger.info('Ansible configuration changed')
+            LOG.info('Ansible configuration changed')
             save_config(self.get_vars_file(), self.ansible_vars, do_backup=do_backup)
 
     def get_ansible_var(self, key, default=None):
-        return self.ansible_vars.get(key, default)
+        return self.ansible_vars_interpolated.get(key, default)
 
     def get_config_var(self, key, default=None):
         return self.config_vars.get(key, default)
@@ -193,22 +311,31 @@ class Config(object):
         self.config_vars[key] = value
 
     def get_ansible_user(self, default=None):
-        user = self.ansible_vars.get('ansible_user')
+        user = self.ansible_vars_interpolated.get('ansible_user')
         if user is None:
-            user = self.ansible_vars.get('ansible_ssh_user', default)
+            user = self.ansible_vars_interpolated.get('ansible_ssh_user', default)
         return user
 
     def set_ansible_user(self, user):
-        self.ansible_vars['ansible_user'] = self.ansible_vars['ansible_ssh_user'] = user
+        self.ansible_vars['ansible_user'] = \
+            self.ansible_vars['ansible_ssh_user'] = \
+            self.ansible_vars_interpolated['ansible_user'] = \
+            self.ansible_vars_interpolated['ansible_ssh_user'] = \
+            user
 
     def get_ansible_private_key_file(self, default=None):
-        f = self.ansible_vars.get('ansible_private_key_file')
+        f = self.ansible_vars_interpolated.get('ansible_private_key_file')
         if f is None:
-            f = self.ansible_vars.get('ansible_ssh_private_key_file', default)
+            f = self.ansible_vars_interpolated.get('ansible_ssh_private_key_file', default)
+        f = fix_path(f, os.path.dirname(CONFIG_VARS_FILE))
         return f
 
     def set_ansible_private_key_file(self, value):
-        self.ansible_vars['ansible_private_key_file'] = self.ansible_vars['ansible_ssh_private_key_file'] = value
+        self.ansible_vars['ansible_private_key_file'] = \
+            self.ansible_vars['ansible_ssh_private_key_file'] = \
+            self.ansible_vars_interpolated['ansible_private_key_file'] = \
+            self.ansible_vars_interpolated['ansible_ssh_private_key_file'] = \
+            value
 
     def get_ansible_inventory(self):
         return self.get_config_var('ANSIBLE_INVENTORY', ANSIBLE_INVENTORY)
@@ -274,7 +401,7 @@ def run_command(command, env=None, cwd=None, stdin=None,
     if get_stdout is False stdout tuple element will be set to None
     if get_stderr is False stderr tuple element will be set to None
     """
-    logger.info('Run command {} in env {}, cwd {}'.format(command, env, cwd))
+    LOG.info('Run command {} in env {}, cwd {}'.format(command, env, cwd))
 
     myenv = {}
     if env is not None:
@@ -317,52 +444,57 @@ def run_command(command, env=None, cwd=None, stdin=None,
             else:
                 err = None
 
-    logger.info('Command {} returned code: {}'.format(command, status))
+    LOG.info('Command {} returned code: {}'.format(command, status))
     return status, out, err
 
 
 def main():
-    config = Config()
+    global LOG
 
-    parser = argparse.ArgumentParser(
-        description="Kubespray configurator",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description="Kubespray configurator")
     parser.add_argument('--debug', help='debug mode', action="store_true")
     parser.add_argument('--no-backup', help='disable backup', action="store_true")
-    parser.add_argument("-i", "--inventory", help="set inventory",
-                        default=realpath_if(config.get_ansible_inventory()))
-    parser.add_argument("--vault", help="set user's vault file",
-                        default=realpath_if(config.get_vault_file()))
-    parser.add_argument("--vars", help="set user's vars file",
-                        default=realpath_if(config.get_vars_file()))
-    parser.add_argument("-u", "--user", help="set remote user",
-                        default=config.get_ansible_user())
+    parser.add_argument("-i", "--inventory", help="set inventory")
+    parser.add_argument("--vault", help="set user's vault file")
+    parser.add_argument("--vars", help="set user's vars file")
+    parser.add_argument("-u", "--user", help="set remote user")
     parser.add_argument("-r", "--reconfigure", help="reconfigure", action="store_true")
-    parser.add_argument("-k", "--private-key", help="set private key filename",
-                        default=realpath_if(config.get_ansible_private_key_file()))
+    parser.add_argument("-k", "--private-key", help="set private key filename")
     parser.add_argument("--shell-config", help="print shell configuration", action="store_true")
     parser.add_argument("--show", help="print info and exit", action="store_true")
     parser.add_argument("-v", "--view-vault", help="view configuration vault and exit", action="store_true")
     parser.add_argument("--decrypt-vault", help="decrypt vault", action="store_true")
     args = parser.parse_args()
 
-    if not args.shell_config:
-        if args.debug:
-            logging.basicConfig(format='%(asctime)s %(levelname)s %(pathname)s:%(lineno)s: %(message)s',
-                                level=logging.DEBUG)
-        else:
-            logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.INFO)
+    if args.debug:
+        logging.basicConfig(format='%(asctime)s %(levelname)s %(pathname)s:%(lineno)s: %(message)s',
+                            level=logging.DEBUG)
+    else:
+        logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
+                            level=logging.INFO if not args.shell_config else logging.WARNING)
+
+    config = Config(debug_mode=args.debug)
+
+    if not args.inventory:
+        args.inventory = realpath_if(config.get_ansible_inventory())
+    if not args.vault:
+        args.vault = realpath_if(config.get_vault_file())
+    if not args.vars:
+        args.vars = realpath_if(config.get_vars_file())
+    if not args.user:
+        args.user = config.get_ansible_user()
+    if not args.private_key:
+        args.private_key = realpath_if(config.get_ansible_private_key_file())
 
     if args.shell_config:
         config.print_shell_config()
         return 0
 
-    readline.parse_and_bind("tab: complete")
-
     if args.show:
         config.print_info()
         return 0
+
+    readline.parse_and_bind("tab: complete")
 
     if args.view_vault:
         os.environ['ANSIBLE_VAULT_PASSWORD_FILE'] = config.get_ansible_vault_password_file()
@@ -373,11 +505,11 @@ def main():
         return subprocess.check_call(['ansible-vault', 'decrypt', config.get_vault_file()], env=os.environ)
 
     if not os.path.isdir(CONFIG_DIR):
-        logger.info('Create directory: %r', CONFIG_DIR)
+        LOG.info('Create directory: %r', CONFIG_DIR)
         os.makedirs(CONFIG_DIR)
 
     if not os.path.exists(config.get_ansible_vault_password_file()):
-        logger.info('Generate vault password file: %r', config.get_ansible_vault_password_file())
+        LOG.info('Generate vault password file: %r', config.get_ansible_vault_password_file())
         with open(config.get_ansible_vault_password_file(), 'w') as fd:
             fd.write(randpw())
 
@@ -387,26 +519,26 @@ def main():
         user = rlinput('Remote (SSH) user name: ', config.get_ansible_user())
         config.set_ansible_user(user)
 
-    logger.info('Ansible user set to %r', config.get_ansible_user())
+    LOG.info('Ansible user set to %r', config.get_ansible_user())
 
     if args.private_key:
         config.set_ansible_private_key_file(args.private_key)
-        logger.info('Set ansible private key file to %r', args.private_key)
+        LOG.info('Set ansible private key file to %r', args.private_key)
 
     if args.inventory:
         if realpath_if(args.inventory) != realpath_if(config.get_ansible_inventory()):
             config.set_ansible_inventory(args.inventory)
-            logger.info('Set ansible inventory file to %r', args.inventory)
+            LOG.info('Set ansible inventory file to %r', args.inventory)
 
     if args.vault:
         if realpath_if(args.vault) != realpath_if(config.get_vault_file()):
             config.set_vault_file(args.vault)
-            logger.info("Set user's ansible vault file to %r", args.vault)
+            LOG.info("Set user's ansible vault file to %r", args.vault)
 
     if args.vars:
         if realpath_if(args.vars) != realpath_if(config.get_vars_file()):
             config.set_vars_file(args.vars)
-            logger.info("Set user's ansible vars file to %r", args.vars)
+            LOG.info("Set user's ansible vars file to %r", args.vars)
 
     if not os.path.exists(config.get_vault_file()) or args.reconfigure:
         count = 0
@@ -426,16 +558,16 @@ def main():
         }
         with open(config.get_vault_file(), 'w') as fd:
             fd.write(dump(vault_data, Dumper=Dumper))
-        logger.info('Wrote sudo password to vault file')
+        LOG.info('Wrote sudo password to vault file')
 
     if os.path.exists(config.get_vault_file()):
         os.environ['ANSIBLE_VAULT_PASSWORD_FILE'] = config.get_ansible_vault_password_file()
         subprocess.call(['ansible-vault', 'encrypt', config.get_vault_file()], env=os.environ, stderr=DEVNULL)
-        logger.info('Encrypted vault file')
+        LOG.info('Encrypted vault file')
 
     config.save(do_backup=not args.no_backup)
 
-    logger.info('Configuration finished')
+    LOG.info('Configuration finished')
 
     config.print_info()
 
