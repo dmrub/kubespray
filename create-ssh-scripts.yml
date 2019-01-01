@@ -4,30 +4,49 @@
   vars:
     - dest_dir: "."
   tasks:
+    - name: Create ssh config file in ssh-config
+      copy:
+        content: |
+          {% for host in groups['all'] %}
+          Host {{ host }}
+            HostName {{ hostvars[host]['ansible_host'] | default(hostvars[host]['ansible_ssh_host'], true) }}
+            User {{ hostvars[host]['ansible_user'] | default(hostvars[host]['ansible_ssh_user'], true) }}
+            Port {{ hostvars[host]['ansible_port'] | default(22, true) }}
+            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking no
+            PasswordAuthentication no
+            IdentityFile {{ hostvars[host]['ansible_ssh_private_key_file'] }}
+          {% endfor %}
+        dest: "{{ dest_dir }}/ssh-config"
+        mode: 0600
     - name: Create ssh login script in run-ssh.sh
       copy:
         content: |
           #!/bin/bash
+          THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
           set -xe
-          ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i '{{ansible_ssh_private_key_file}}' -l '{{ansible_user}}' {{ansible_ssh_common_args}} "$@"
+          ssh -F "$THIS_DIR/ssh-config" {{ansible_ssh_common_args}} "$@"
         dest: "{{ dest_dir }}/run-ssh.sh"
         mode: 0755
     - name: Create scp script in run-scp.sh
       copy:
         content: |
           #!/bin/bash
+          THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
           set -xe
-          scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i '{{ansible_ssh_private_key_file}}' -o User='{{ansible_user}}' {{ansible_ssh_common_args}} "$@"
+          scp -F "$THIS_DIR/ssh-config" {{ansible_ssh_common_args}} "$@"
         dest: "{{ dest_dir }}/run-scp.sh"
         mode: 0755
     - name: Set remote shell var
       set_fact:
-        rsh: "ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i '{{ansible_ssh_private_key_file}}' -l '{{ansible_user}}' {{ansible_ssh_common_args}}"
+        rsh_args: "{{ansible_ssh_common_args}}"
     - name: Create rsync script in run-rsync.sh
       copy:
         content: |
           #!/bin/bash
-          RSH={{ rsh | quote }}
+          THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
+          RSH_ARGS={{ rsh_args | quote }}
+          RSH="ssh -F '$THIS_DIR/ssh-config' ${RSH_ARGS}"
           set -xe
           rsync -avhe "$RSH" --stats --progress "$@"
         dest: "{{ dest_dir }}/run-rsync.sh"
