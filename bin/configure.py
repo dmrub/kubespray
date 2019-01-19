@@ -91,6 +91,8 @@ def load_config(file_name, defaults=None):
         try:
             with open(file_name, 'r') as fd:
                 config_vars = load(fd, Loader=Loader)
+            if config_vars is None:
+                config_vars = {}
             LOG.info('Loaded configuration variables from file: %s', file_name)
         except Exception:
             LOG.exception('Could not load configuration variables from file: %s', file_name)
@@ -189,7 +191,7 @@ class Config(object):
         shash.update(repr(self.ansible_vars))
         ansible_vars_hash = shash.hexdigest()
         del shash
-        #print(shash.hexdigest(), file=sys.stderr) # DEBUG
+        # print(shash.hexdigest(), file=sys.stderr) # DEBUG
 
         ansible_vars_cache_fn = self.get_vars_file() + ".cache"
 
@@ -217,10 +219,10 @@ class Config(object):
             # By default interpolated variables are equal to non-interpolated
             self.ansible_vars_interpolated = self.ansible_vars
             ansible_var_names = set(self.ansible_vars.keys())
-            ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
-                                      'ansible_private_key_file',
-                                      'ansible_ssh_private_key_file',
-                                      ])
+            #ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
+            #                          'ansible_private_key_file',
+            #                          'ansible_ssh_private_key_file',
+            #                          ])
             ansible_var_names.difference_update(['ansible_become_pass'])
             indent = "      "
             vars_struct = ""
@@ -252,14 +254,16 @@ class Config(object):
                 with open(get_vars_playbook_fn, 'w') as fd:
                     fd.write(vars_tmpl)
 
-                args = ['ansible-playbook',
-                        '-i', self.get_ansible_inventory(),
-                        '--vault-password-file', self.get_ansible_vault_password_file(),
-                        '--extra-vars', '@' + self.get_vault_file(),
-                        '--extra-vars', '@' + self.get_vars_file(),
-                        '--extra-vars', 'CFG_DEST_FILE={}'.format(shlex_quote(vars_fn)),
-                        get_vars_playbook_fn
-                        ]
+                args = ['ansible-playbook', '-i', self.get_ansible_inventory()]
+                if os.path.exists(self.get_ansible_vault_password_file()):
+                    args.extend(['--vault-password-file', self.get_ansible_vault_password_file()])
+                if os.path.exists(self.get_vault_file()):
+                    args.extend(['--extra-vars', '@' + self.get_vault_file()])
+                if os.path.exists(self.get_vars_file()):
+                    args.extend(['--extra-vars', '@' + self.get_vars_file()])
+                args.extend(['--extra-vars', 'CFG_DEST_FILE={}'.format(shlex_quote(vars_fn)),
+                             get_vars_playbook_fn
+                             ])
                 LOG.debug("Interpolate loaded variables: %s", " ".join(args))
                 save_cache = False
                 try:
@@ -515,7 +519,7 @@ def main():
 
     if args.user:
         config.set_ansible_user(args.user)
-    else:
+    elif args.reconfigure:
         user = rlinput('Remote (SSH) user name: ', config.get_ansible_user())
         config.set_ansible_user(user)
 
@@ -540,7 +544,7 @@ def main():
             config.set_vars_file(args.vars)
             LOG.info("Set user's ansible vars file to %r", args.vars)
 
-    if not os.path.exists(config.get_vault_file()) or args.reconfigure:
+    if args.reconfigure:
         count = 0
         while True:
             if count > 2:
