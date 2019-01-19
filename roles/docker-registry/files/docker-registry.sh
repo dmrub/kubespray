@@ -30,7 +30,15 @@ fi
 
 case "$1" in
     start)
+        set -xe
         mkdir -p /var/lib/registry
+        # Ensure that DOCKER chain is created for filter table
+        if ! iptables --wait -t filter -n --list DOCKER >/dev/null 2>&1; then
+            echo >&2 "WARNING: DOCKER iptables chain is missing in the filter table."
+            echo >&2 "         I'll try to create this chain, but there's probably something wrong"
+            echo >&2 "         with the docker daemon, so try to restart it."
+            iptables --wait -t filter -N DOCKER
+        fi
         # 'Z' suffix on volume setup SELinux context
         # see "man docker-run" for details
         exec /usr/bin/docker run \
