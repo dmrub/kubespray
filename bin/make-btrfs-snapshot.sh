@@ -7,7 +7,7 @@ remove-mountpoint() {
         umount "$mp"
         rmdir "$mp"
 
-        tmpfile=`mktemp -q -t fstab.XXXXXXXXXX` && {
+        tmpfile=$(mktemp -q -t fstab.XXXXXXXXXX) && {
             # Safe to use $tmpfile in this block
             awk -v mp="$mp" '/^($|[[:space:]]*#)/ { print $0; next; } $2 != mp { print $0; }' /etc/fstab > "$tmpfile" && \
                 cat "$tmpfile" > /etc/fstab
@@ -82,8 +82,9 @@ script() {
 }
 
 if [ "$1" != "--snapshot" ]; then
-    THIS_DIR=$(dirname "$(readlink -f "$BASH_SOURCE")")
+    THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
+    # shellcheck source=init-env.sh
     source "$THIS_DIR/init-env.sh"
 
     usage() {
@@ -145,7 +146,7 @@ if [ "$1" != "--snapshot" ]; then
 
     echo "Making snapshot $SNAPSHOT on hosts $HOST_PATTERN"
 
-    THIS_SCRIPT="$(readlink -f "$BASH_SOURCE")"
+    THIS_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
 
     ansible -i "$ANSIBLE_INVENTORY" "$HOST_PATTERN" --become -m script --args "$THIS_SCRIPT --snapshot '$SNAPSHOT'"
 

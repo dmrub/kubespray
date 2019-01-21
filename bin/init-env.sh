@@ -1,3 +1,4 @@
+#!/bin/bash
 ROOT_DIR=$THIS_DIR/..
 CFG_CONFIG_FILE=${CFG_CONFIG_FILE:-$ROOT_DIR/config.yml}
 CFG_CONFIG_FILE_DIR=$(dirname "$CFG_CONFIG_FILE")
@@ -18,7 +19,7 @@ export ANSIBLE_FILTER_PLUGINS=$ANSIBLE_DIR/filter_plugins
 export ANSIBLE_ROLES_PATH=$ANSIBLE_DIR/roles
 
 error() {
-    echo >&2 "Error: $@"
+    echo >&2 "Error: $*"
 }
 
 fatal() {
@@ -61,7 +62,8 @@ check-config() {
 }
 
 check-inventory() {
-    local inv_dir=$(dirname "$1")
+    local inv_dir
+    inv_dir=$(dirname "$1")
     #if [[ ! -e "${inv_dir}/group_vars" ]]; then
     #    fatal "group_vars directory is missing in ${inv_dir} inventory directory"
     #fi
@@ -71,7 +73,7 @@ ansible_playbook() {
     local inventory=$1
     check-config
     check-inventory "$inventory"
-    echo "+ ansible-playbook -i $@"
+    echo "+ ansible-playbook -i $*"
     ansible-playbook -i "$@"
 }
 
@@ -141,7 +143,7 @@ read-config-file() {
             rhs="${rhs%"${rhs##*[^ ]}"}"    # Del trailing spaces
             rhs="${rhs%\"*}"                # Del opening string quotes
             rhs="${rhs#\"*}"                # Del closing string quotes
-            declare -g "${prefix}${lhs}"="${rhs}"
+            declare -g "${prefix}${lhs}=${rhs}"
         fi
     done <<<"$cfg"
 }
