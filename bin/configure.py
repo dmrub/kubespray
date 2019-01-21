@@ -467,7 +467,9 @@ def main():
     parser.add_argument("--shell-config", help="print shell configuration", action="store_true")
     parser.add_argument("--show", help="print info and exit", action="store_true")
     parser.add_argument("-v", "--view-vault", help="view configuration vault and exit", action="store_true")
-    parser.add_argument("--decrypt-vault", help="decrypt vault", action="store_true")
+    parser.add_argument("--decrypt-vault", help="decrypt vault and exit", action="store_true")
+    parser.add_argument("--edit-vault", help="edit vault and exit", action="store_true")
+    parser.add_argument("--encrypt-vault", help="encrypt vault and exit", action="store_true")
     args = parser.parse_args()
 
     if args.debug:
@@ -507,6 +509,14 @@ def main():
     if args.decrypt_vault:
         os.environ['ANSIBLE_VAULT_PASSWORD_FILE'] = config.get_ansible_vault_password_file()
         return subprocess.check_call(['ansible-vault', 'decrypt', config.get_vault_file()], env=os.environ)
+
+    if args.encrypt_vault:
+        os.environ['ANSIBLE_VAULT_PASSWORD_FILE'] = config.get_ansible_vault_password_file()
+        return subprocess.call(['ansible-vault', 'encrypt', config.get_vault_file()], env=os.environ, stderr=DEVNULL)
+
+    if args.edit_vault:
+        os.environ['ANSIBLE_VAULT_PASSWORD_FILE'] = config.get_ansible_vault_password_file()
+        return subprocess.call(['ansible-vault', 'edit', config.get_vault_file()], env=os.environ, stderr=DEVNULL)
 
     if not os.path.isdir(CONFIG_DIR):
         LOG.info('Create directory: %r', CONFIG_DIR)
