@@ -50,7 +50,8 @@ script() {
         set +xe
     fi
 
-    local FSTYPE=$(blkid -o value -s TYPE "$PARTDEV")
+    local FSTYPE
+    FSTYPE=$(blkid -o value -s TYPE "$PARTDEV")
 
     if [[ -b "$PARTDEV" && "$FSTYPE" != "btrfs" ]]; then
         echo "Make filesystem in partition $PARTDEV"
@@ -78,14 +79,15 @@ script() {
         fi
     done
 
-    add-filesystem UUID=$UUID /storage btrfs defaults,subvol=root,nofail 0 2
-    add-filesystem UUID=$UUID /var/lib/docker btrfs defaults,subvol=docker,nofail 0 2
+    add-filesystem "UUID=$UUID" /storage btrfs defaults,subvol=root,nofail 0 2
+    add-filesystem "UUID=$UUID" /var/lib/docker btrfs defaults,subvol=docker,nofail 0 2
     mount -a
 }
 
 if [[ "$1" != "--script" ]]; then
-    THIS_DIR=$(dirname "$(readlink -f "$BASH_SOURCE")")
+    THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
+    # shellcheck source=init-env.sh
     source "$THIS_DIR/init-env.sh"
 
     DEV=/dev/sdb
@@ -120,7 +122,7 @@ if [[ "$1" != "--script" ]]; then
                 shift
                 ;;
             --part=*)
-                PART="${1#*=}"
+                PARTDEV="${1#*=}"
                 shift
                 ;;
             --help)
@@ -140,10 +142,10 @@ if [[ "$1" != "--script" ]]; then
         esac
     done
 
-    THIS_SCRIPT="$(readlink -f "$BASH_SOURCE")"
+    THIS_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
 
     run-ansible \
-        "$HOST_PATTERN" --become -m script --args "$THIS_SCRIPT --script $DEV $PARTDEV $@"
+        "$HOST_PATTERN" --become -m script --args "$THIS_SCRIPT --script $DEV $PARTDEV $*"
 
 else
     # Remote code

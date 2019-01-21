@@ -1,6 +1,6 @@
 #!/bin/bash
 
-THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
+THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
 set -eo pipefail
 
