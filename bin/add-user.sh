@@ -47,8 +47,9 @@ script() {
 }
 
 if [ "$1" != "--remote" ]; then
-    THIS_DIR=$(dirname "$(readlink -f "$BASH_SOURCE")")
+    THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
+    # shellcheck source=init-env.sh
     source "$THIS_DIR/init-env.sh"
 
     usage() {
@@ -121,8 +122,8 @@ if [ "$1" != "--remote" ]; then
         echo "And set password"
     fi
 
-    THIS_SCRIPT="$( readlink -f "${BASH_SOURCE}" 2>/dev/null || \
-  python -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE}" )"
+    THIS_SCRIPT="$( readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || \
+  python -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}" )"
 
     run-ansible \
             "$HOST_PATTERN" \

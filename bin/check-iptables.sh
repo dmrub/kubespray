@@ -1,7 +1,8 @@
 #!/bin/bash
 
-THIS_DIR=$(dirname "$(readlink -f "$BASH_SOURCE")")
+THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
+# shellcheck source=init-env.sh
 source "$THIS_DIR/init-env.sh"
 
 ansible all -i "$ANSIBLE_INVENTORY" \

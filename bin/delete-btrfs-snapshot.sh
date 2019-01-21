@@ -7,7 +7,7 @@ remove-mountpoint() {
         umount "$mp"
         rmdir "$mp"
 
-        tmpfile=`mktemp -q -t fstab.XXXXXXXXXX` && {
+        tmpfile=$(mktemp -q -t fstab.XXXXXXXXXX) && {
             # Safe to use $tmpfile in this block
             awk -v mp="$mp" '/^($|[[:space:]]*#)/ { print $0; next; } $2 != mp { print $0; }' /etc/fstab > "$tmpfile" && \
                 cat "$tmpfile" > /etc/fstab
@@ -71,8 +71,9 @@ script() {
 }
 
 if [ "$1" != "--snapshot" ]; then
-    THIS_DIR=$(dirname "$(readlink -f "$BASH_SOURCE")")
+    THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
+    # shellcheck source=init-env.sh
     source "$THIS_DIR/init-env.sh"
 
     usage() {
@@ -86,7 +87,6 @@ if [ "$1" != "--snapshot" ]; then
     }
 
     HOST_PATTERN=all
-    ADD_TIMESTAMP=
 
     while [[ "$1" == "-"* ]]; do
         case "$1" in
@@ -96,10 +96,6 @@ if [ "$1" != "--snapshot" ]; then
                 ;;
             --host-pattern=*)
                 HOST_PATTERN="${1#*=}"
-                shift
-                ;;
-            -t|--add-timestamp)
-                ADD_TIMESTAMP=true
                 shift
                 ;;
             --help)
@@ -128,7 +124,7 @@ if [ "$1" != "--snapshot" ]; then
 
     echo "Delete snapshot $SNAPSHOT on hosts $HOST_PATTERN"
 
-    ansible -i "$INVENTORY" "$HOST_PATTERN" --become -m script --args "'$0' --snapshot '$SNAPSHOT'"
+    ansible -i "${ANSIBLE_INVENTORY}" "$HOST_PATTERN" --become -m script --args "'$0' --snapshot '$SNAPSHOT'"
 
 else
     # Remote code
