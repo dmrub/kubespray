@@ -7,7 +7,7 @@ remove-mountpoint() {
         umount "$mp"
         rmdir "$mp"
 
-        tmpfile=`mktemp -q -t fstab.XXXXXXXXXX` && {
+        tmpfile=$(mktemp -q -t fstab.XXXXXXXXXX) && {
             # Safe to use $tmpfile in this block
             awk -v mp="$mp" '/^($|[[:space:]]*#)/ { print $0; next; } $2 != mp { print $0; }' /etc/fstab > "$tmpfile" && \
                 cat "$tmpfile" > /etc/fstab
@@ -73,7 +73,7 @@ script() {
                     exit 1
                 fi
 
-                echo "Rename snapshot $OLD_SNAPSHOT to $NEW_SNAPSHOT of path $mp (subvolume: $subvol_name) in $snapshot_path"
+                echo "Rename snapshot $OLD_SNAPSHOT to $NEW_SNAPSHOT of path $mp (subvolume: $subvol_name) in $snapshots_path"
 
                 btrfs subvolume snapshot -r "$old_snapshot_path" "$new_snapshot_path" || {
                     echo >&2 "Could not create snapshot of $old_snapshot_path in $new_snapshot_path"
@@ -90,8 +90,9 @@ script() {
 }
 
 if [ "$1" != "--snapshot" ]; then
-    THIS_DIR=$(dirname "$(readlink -f "$BASH_SOURCE")")
+    THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
 
+    # shellcheck source=init-env.sh
     source "$THIS_DIR/init-env.sh"
 
     usage() {
@@ -105,7 +106,6 @@ if [ "$1" != "--snapshot" ]; then
     }
 
     HOST_PATTERN=all
-    ADD_TIMESTAMP=
 
     while [[ "$1" == "-"* ]]; do
         case "$1" in
@@ -115,10 +115,6 @@ if [ "$1" != "--snapshot" ]; then
                 ;;
             --host-pattern=*)
                 HOST_PATTERN="${1#*=}"
-                shift
-                ;;
-            -t|--add-timestamp)
-                ADD_TIMESTAMP=true
                 shift
                 ;;
             --help)
