@@ -31,6 +31,19 @@ try:
 except ImportError:
     from yaml import Loader, Dumper
 
+import difflib
+import pprint
+
+
+def diff_dicts(a, b):
+    if a == b:
+        return ''
+    return '\n'.join(
+        difflib.ndiff(pprint.pformat(a, width=70).splitlines(),
+                      pprint.pformat(b, width=70).splitlines())
+    )
+
+
 LOG = logging.getLogger(__name__)
 
 # Default configuration
@@ -44,7 +57,7 @@ ANSIBLE_PLAYBOOKS_DIR = ANSIBLE_DIR
 ANSIBLE_INVENTORY_DIR = os.path.join(ROOT_DIR, 'inventory')
 ANSIBLE_INVENTORY = os.path.join(ANSIBLE_INVENTORY_DIR, 'inventory.cfg')
 ANSIBLE_VAULT_PASSWORD_FILE = os.getenv('ANSIBLE_VAULT_PASSWORD_FILE',
-                                                     os.path.join(CONFIG_DIR, 'vault_pass.txt'))
+                                        os.path.join(CONFIG_DIR, 'vault_pass.txt'))
 ANSIBLE_CONFIG = os.getenv('ANSIBLE_CONFIG',
                            os.path.join(ANSIBLE_DIR, 'ansible.cfg'))
 ANSIBLE_FILTER_PLUGINS = os.getenv('ANSIBLE_FILTER_PLUGINS',
@@ -140,24 +153,42 @@ EXPORT_SHELL_VARS = {
     'ANSIBLE_PRIVATE_KEY_FILE': PATH_MOD,
 }
 
-PATH_VARS = {'ANSIBLE_CONFIG', 'ANSIBLE_INVENTORY', 'ANSIBLE_ROLES_PATH', 'CFG_VAULT_FILE', 'CFG_VARS_FILE',
-             'ANSIBLE_FILTER_PLUGINS', 'ANSIBLE_VAULT_PASSWORD_FILE', 'ANSIBLE_PRIVATE_KEY_FILE'}
+CONFIG_PATH_VAR_NAMES = {
+    'ANSIBLE_CONFIG', 'ANSIBLE_INVENTORY', 'ANSIBLE_ROLES_PATH', 'CFG_VAULT_FILE', 'CFG_VARS_FILE',
+    'ANSIBLE_FILTER_PLUGINS', 'ANSIBLE_VAULT_PASSWORD_FILE', 'ANSIBLE_PRIVATE_KEY_FILE'
+}
 
 
 def fix_path(path, root_dir):
     if path and not os.path.isabs(path):
-        return os.path.join(root_dir, path)
+        return os.path.realpath(os.path.join(root_dir, path))
     else:
         return path
 
 
-def fix_path_vars(vars):
-    dirname = os.path.dirname(CONFIG_VARS_FILE)
-    for var in PATH_VARS:
-        val = vars.get(var)
+def fix_path_vars(vars_dict, path_var_names, root_dir):
+    for var in path_var_names:
+        val = vars_dict.get(var)
         if val and not os.path.isabs(val):
-            vars[var] = os.path.join(dirname, val)
-    return vars
+            vars_dict[var] = os.path.realpath(os.path.join(root_dir, val))
+    return vars_dict
+
+
+def fix_config_path_vars(vars_dict):
+    return fix_path_vars(vars_dict, CONFIG_PATH_VAR_NAMES, os.path.dirname(CONFIG_VARS_FILE))
+
+
+ANSIBLE_PATH_VAR_NAMES = {
+    'ansible_private_key_file',
+    'ansible_ssh_private_key_file',
+    'ansible_public_key_file',
+    'ansible_ssh_public_key_file',
+    'bastion_ssh_private_key_file'
+}
+
+
+def fix_ansible_path_vars(vars_dict):
+    return fix_path_vars(vars_dict, ANSIBLE_PATH_VAR_NAMES, ROOT_DIR)
 
 
 class Config(object):
@@ -175,14 +206,14 @@ class Config(object):
             'CFG_VAULT_FILE': CFG_VAULT_FILE,
             'CFG_VARS_FILE': CFG_VARS_FILE
         })
-        fix_path_vars(self.config_vars)
+        fix_config_path_vars(self.config_vars)
         # save initial state
         self._init_config_vars = copy.deepcopy(self.config_vars)
 
         # load ansible variables
         self.ansible_vars = load_config(self.get_vars_file(), defaults={})
         self.ansible_vars.pop('ansible_become_pass', None)
-
+        fix_ansible_path_vars(self.ansible_vars)
         # save initial state
         self._init_ansible_vars = copy.deepcopy(self.ansible_vars)
 
@@ -219,7 +250,7 @@ class Config(object):
             # By default interpolated variables are equal to non-interpolated
             self.ansible_vars_interpolated = self.ansible_vars
             ansible_var_names = set(self.ansible_vars.keys())
-            #ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
+            # ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
             #                          'ansible_private_key_file',
             #                          'ansible_ssh_private_key_file',
             #                          ])
