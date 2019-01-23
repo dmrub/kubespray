@@ -1,27 +1,46 @@
 ---
 - hosts: k8s-cluster:etcd:calico-rr
   tasks:
-    - name: Backup /etc/fstab
-      copy:
-        src: /etc/fstab
-        dest: /etc/fstab.backup
-        owner: root
-        group: root
-        mode: 0644
-        backup: yes
-      become: yes
-      when: ansible_swaptotal_mb > 0
+    - name: Get swap memory
+      setup:
+        gather_subset:
+          - '!all'
+          - '!any'
+          - hardware
 
-    - name: Remove swapfile from /etc/fstab
-      mount:
-        name: swap
-        fstype: swap
-        state: absent
-      become: yes
-      ignore_errors: yes
+    - name: Print swap memory
+      debug:
+        var: ansible_swaptotal_mb
 
     - name: Disable swap
-      command: swapoff --all
-      ignore_errors: yes
-      become: yes
+      block:
+      - name: Backup /etc/fstab
+        copy:
+          remote_src: yes
+          src: /etc/fstab
+          dest: /etc/fstab.backup
+          owner: root
+          group: root
+          mode: 0644
+          backup: yes
+        become: yes
+        register: backup_result
+
+      - name: Print saved backup file
+        debug:
+          msg: "Old backup saved to file {{ backup_result.backup_file }}"
+        when: backup_result.changed and backup_result.backup_file is defined
+
+      - name: Remove swapfile from /etc/fstab
+        mount:
+          name: swap
+          fstype: swap
+          state: absent
+        ignore_errors: yes
+
+      - name: Disable swap
+        command: swapoff --all
+        ignore_errors: yes
+
       when: ansible_swaptotal_mb > 0
+      become: yes
