@@ -1,0 +1,7 @@
+nvidia_centos_driver_url: "https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-repo-rhel7-10.1.105-1.x86_64.rpm"
+nvidia_fedora_driver_url: "https://developer.download.nvidia.com/compute/cuda/repos/fedora29/x86_64/cuda-repo-fedora29-10.1.105-1.x86_64.rpm"
+nvidia_ubuntu_driver_url: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/cuda-repo-ubuntu1804_10.1.105-1_amd64.deb"
+nvidia_ubuntu_keys_url: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub"
+local_temp_driver_dir: "/tmp/nvidia-driver"
+remote_temp_driver_dir: "/usr/share/nvidia-driver"
+reinstall_nvidia_driver: false
