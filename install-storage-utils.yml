@@ -1,0 +1,33 @@
+---
+- hosts: kube-node
+  pre_tasks:
+    - name: gather facts from all instances
+      setup:
+  tasks:
+    - name: Install storage utils on RedHat
+      action: "{{ ansible_pkg_mgr }}"
+      args:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - [ 'nfs-utils', 'iscsi-initiator-utils' ]
+      become: yes
+      when: ansible_distribution in ["CentOS", "RedHat", "Fedora"]
+
+    - name: Install storage utils on Debian
+      action: "{{ ansible_pkg_mgr }}"
+      args:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - [ 'nfs-common', 'open-iscsi' ]
+      become: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Configure iscsid.conf
+      command: 'sed -i -e "s|^[[:space:]]*node[.]startup = automatic|node.startup = manual|g" /etc/iscsi/iscsid.conf'
+      become: yes
+
+    - name: Configure initiator name
+      shell: 'echo "InitiatorName=$(/sbin/iscsi-iname -p "iqn.$(date +%Y-%m).de.dfki.sb.$(hostname)")" > /etc/iscsi/initiatorname.iscsi'
+      become: yes
