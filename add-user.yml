@@ -1,0 +1,38 @@
+- hosts: all
+  gather_facts: no
+  vars_prompt:
+    - name: "user_name"
+      prompt: "User name"
+    - name: "user_groups"
+      prompt: "User groups (separated by comma)"
+    - name: "user_password"
+      prompt: "User password"
+      private: yes
+      confirm: yes
+  tasks:
+    - name: Ensure groups exists
+      become: true
+      group:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ user_groups.split(',') }}"
+      when: "user_groups is defined and (user_groups | trim != '')"
+
+    - name: Create user
+      become: true
+      user:
+        name: "{{ user_name }}"
+        password: "{{ (user_password | password_hash('sha512')) if user_password is defined and (user_password != '') else  omit }}"
+        groups: "{{ user_groups }}"
+        state: present
+        append: yes
+        shell: /bin/bash
+        createhome: yes
+
+    - name: Set authorized key took from file
+      become: true
+      authorized_key:
+        user: "{{ user_name }}"
+        state: present
+        key: "{{ lookup('file', user_public_key_file) }}"
+      when: "user_public_key_file is defined and (user_public_key_file | trim != '')"
