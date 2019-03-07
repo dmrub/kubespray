@@ -1,0 +1,204 @@
+# Based on: https://nvidia.github.io/nvidia-docker/
+# Support for Fedora is not yet existing, use this: https://github.com/NVIDIA/nvidia-docker/issues/553#issuecomment-381075335
+
+---
+
+- name: docker | Configure Debian-based distributions
+  shell: |
+    set -xe;
+    apt-get install -y \
+      apt-transport-https \
+      ca-certificates \
+      curl \
+      gnupg-agent \
+      software-properties-common;
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+      sudo apt-key add -;
+    echo "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
+      sudo tee /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list;
+    sudo apt-get update;
+  args:
+    creates: /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+  become: yes
+  when: ansible_os_family == 'Debian'
+  register: result
+
+- name: nvidia-docker | Configure RHEL-based repository
+  shell: |
+    set -xe;
+    distribution=$(. /etc/os-release; echo $ID$VERSION_ID);
+    curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | \
+      tee /etc/yum.repos.d/nvidia-docker.repo;
+  args:
+    creates: /etc/yum.repos.d/nvidia-docker.repo
+  become: yes
+  when: ansible_distribution in ["CentOS", "RedHat"]
+  register: result
+
+- name: nvidia-docker | Configure Debian-based distributions
+  shell: |
+    set -xe;
+    curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
+      sudo apt-key add -;
+    distribution=$(. /etc/os-release;echo $ID$VERSION_ID);
+    curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+      sudo tee /etc/apt/sources.list.d/nvidia-docker.list;
+    sudo apt-get update;
+  args:
+    creates: /etc/apt/sources.list.d/nvidia-docker.list
+  become: yes
+  when: ansible_os_family == 'Debian'
+  register: result
+
+- debug:
+    var: result.stdout
+
+- name: nvidia-docker | Update repository keys for RHEL-based distributions
+  shell: |
+    set -xe;
+    DIST=$(sed -n 's/releasever=//p' /etc/yum.conf);
+    DIST=${DIST:-$(. /etc/os-release; echo $VERSION_ID)};
+    rpm -e gpg-pubkey-f796ecb0 || true;
+    gpg --homedir /var/lib/yum/repos/$(uname -m)/$DIST/nvidia-docker/gpgdir --delete-key f796ecb0 || true;
+    yum makecache -y;
+  become: yes
+  when: ansible_distribution in ["CentOS", "RedHat"]
+  register: result
+
+- name: nvidia-docker | Update repository keys for Debian-based distributions
+  shell: |
+    set -xe;
+    curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
+      sudo apt-key add -
+  become: yes
+  when: ansible_os_family == 'Debian'
+  register: result
+
+- debug:
+    var: result.stdout
+
+- name: nvidia-docker | Install nvidia-docker2 on Debian
+  action: "{{ ansible_pkg_mgr }}"
+  args:
+    name: "{{ item }}"
+    state: latest
+  loop:
+    - [ 'nvidia-docker2' ]
+  become: yes
+  register: nvidia_docker_install_r
+  when: ansible_os_family == "Debian"
+
+- name: nvidia-docker | Install nvidia-docker2 on RHEL-based distributions
+  command: "{{ ansible_pkg_mgr }} install -y nvidia-docker2"
+  register: nvidia_docker_install_r
+  changed_when: "'already installed' not in nvidia_docker_install_r.stdout"
+  become: yes
+  when: ansible_distribution in ["CentOS", "RedHat"]
+
+- name: nvidia-docker | Restart docker
+  command: pkill -SIGHUP dockerd
+  when: nvidia_docker_install_r is changed
+  become: yes
+
+- name: nvidia-docker | Test nvidia-docker 1
+  command: docker run --runtime=nvidia --rm nvidia/cuda nvidia-smi
+  become: yes
+  failed_when: false
+  register: result
+
+- name: nvidia-docker | Restart docker again if required
+  command: pkill -SIGHUP dockerd
+  when: result.rc != 0
+  become: yes
+  register: result
+
+- name: nvidia-docker | Test nvidia-docker 2
+  command: docker run --runtime=nvidia --rm nvidia/cuda nvidia-smi
+  become: yes
+  register: result
+  when: result is changed
+
+- debug:
+    var: result.stdout_lines
+
+- name: Ensures /etc/docker directory exists
+  file:
+    path: "/etc/docker"
+    state: directory
+    mode: 0700
+  become: yes
+
+- name: Check that /etc/docker/daemon.json exists
+  stat:
+    path: /etc/docker/daemon.json
+  register: docker_daemon_conf_stat_result
+  become: yes
+
+- name: Update /etc/docker/daemon.json file
+  block:
+    - name: Read /etc/docker/daemon.json configuration
+      command: cat /etc/docker/daemon.json
+      register: docker_daemon_conf
+
+    - name: Parse JSON
+      set_fact:
+        docker_daemon_json: "{{ docker_daemon_conf.stdout | from_json }}"
+
+    - name: Check nvidia runtime
+      assert:
+        that:
+          - "(docker_daemon_json | json_query('runtimes.nvidia.path') | default('', true) | trim) != ''"
+        fail_msg: "No nvidia runtime defined in /etc/docker/daemon.json"
+
+    - name: Get default runtime
+      set_fact:
+        docker_default_runtime: "{{ docker_daemon_json | json_query('\"default-runtime\"') }}"
+
+    - debug:
+        msg: "Docker default runtime is {{ docker_default_runtime }}"
+
+    - name: Set default runtime to nvidia
+      set_fact:
+        docker_daemon_json: "{{ docker_daemon_json | combine({'default-runtime': 'nvidia'}, recursive=True) }}"
+      when: docker_default_runtime != 'nvidia'
+
+    - name: Write configuration
+      copy:
+        content: "{{ docker_daemon_json | to_nice_json }}"
+        dest: /etc/docker/daemon.json
+        mode: 0644
+        owner: root
+        group: root
+        backup: yes
+      register: docker_daemon_conf
+      when: docker_default_runtime != 'nvidia'
+
+    - name: Restart docker
+      systemd:
+        state: restarted
+        name: docker
+      when: docker_default_runtime != 'nvidia' and docker_daemon_conf is changed
+
+  when: docker_daemon_conf_stat_result.stat.exists == True
+  become: yes
+
+- name: Create /etc/docker/daemon.json configuration
+  copy:
+    dest: "/etc/docker/daemon.json"
+    content: |
+      {
+          "default-runtime": "nvidia",
+          "runtimes": {
+              "nvidia": {
+                  "path": "/usr/bin/nvidia-container-runtime",
+                  "runtimeArgs": []
+              }
+          }
+      }
+    mode: 0644
+    owner: root
+    group: root
+    backup: yes
+  register: docker_daemon_conf_created
+  when: docker_daemon_conf_stat_result.stat.exists == False
+  become: yes

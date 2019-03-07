@@ -1,0 +1,354 @@
+# Based on: https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#package-manager-installation
+
+---
+
+- name: NVIDIA Driver | Generic facts
+  set_fact:
+    reboot_system: false
+
+- name: NVIDIA Driver | Fedora
+  block:
+
+    - name: NVIDIA Driver | Set facts
+      set_fact:
+        nvidia_driver_url: "{{ nvidia_fedora_driver_url }}"
+
+    - name: NVIDIA Driver | Install RPMFusion free repository for Fedora
+      shell: "dnf install -y https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+
+    - name: NVIDIA Driver | Update system
+      shell: "{{ ansible_pkg_mgr }} update -y"
+
+    - name: NVIDIA Driver | Install dependencies for Fedora
+      action: "{{ ansible_pkg_mgr }}"
+      args:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - [ 'akmods' ]
+        - [ 'kernel-devel', 'kernel-headers', 'gcc' ]
+
+  become: yes
+  when: ansible_distribution == "Fedora"
+
+- name: NVIDIA Driver | CentOS
+  block:
+    - name: NVIDIA Driver | Set facts
+      set_fact:
+        nvidia_driver_url: "{{ nvidia_centos_driver_url }}"
+
+    - name: NVIDIA Driver | Update system
+      shell: "{{ ansible_pkg_mgr }} update -y"
+      become: yes
+
+    - name: NVIDIA Driver | Install dependencies
+      action: "{{ ansible_pkg_mgr }}"
+      args:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - 'epel-release'
+        - [ 'kernel-devel', 'kernel-headers', 'gcc', 'dkms', 'acpid' ]
+
+  become: yes
+  when: ansible_distribution in ["CentOS", "RedHat"]
+
+- name: NVIDIA Driver | Ubuntu
+  block:
+    - name: NVIDIA Driver | Set facts
+      set_fact:
+        nvidia_driver_url: "{{ nvidia_ubuntu_driver_url }}"
+
+    - name: NVIDIA Driver | Install dependencies
+      action: "{{ ansible_pkg_mgr }}"
+      args:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - 'linux-headers-{{ansible_kernel}}'
+
+  become: yes
+  when: ansible_distribution in ["Ubuntu"]
+
+- name: NVIDIA Driver | Set facts
+  set_fact:
+    nvidia_driver_name: "{{ nvidia_driver_url | urlsplit('path') | basename }}"
+
+- name: NVIDIA Driver | Assures remote temp dir exists
+  file:
+    path: "{{ remote_temp_driver_dir }}"
+    state: directory
+
+- name: NVIDIA Driver | Download driver
+  get_url:
+    url: "{{ nvidia_driver_url }}"
+    dest: "{{ remote_temp_driver_dir }}/{{ nvidia_driver_name }}"
+
+- name: NVIDIA Driver | RedHat Installation
+  block:
+    - name: NVIDIA Driver | Set facts
+      set_fact:
+        nvidia_driver_install_options: "{{ '--reinstall' if reinstall_nvidia_driver else '' }}"
+
+    - name: NVIDIA Driver | Install driver rpm
+      command: rpm --install {{nvidia_driver_install_options}} "{{ remote_temp_driver_dir }}/{{ nvidia_driver_name }}"
+      become: yes
+      register: install_rpm_r
+      failed_when: install_rpm_r.rc != 0 and 'is already installed' not in install_rpm_r.stderr
+      changed_when: install_rpm_r.rc == 0
+      when: nvidia_driver_name is defined and nvidia_driver_name.endswith('.rpm')
+
+    - name: NVIDIA Driver | Clean expire cache
+      command: "{{ ansible_pkg_mgr }} clean expire-cache"
+      when: install_rpm_r is changed
+
+    - name: NVIDIA Driver | Install CUDA drivers
+      command: "{{ ansible_pkg_mgr }} install -y cuda-drivers"
+      when: install_rpm_r is changed
+
+    - name: NVIDIA Driver | Set reboot flag
+      set_fact:
+        reboot_system: true
+      when: install_rpm_r is changed
+
+  when: ansible_distribution in ["CentOS", "RedHat", "Fedora"]
+
+- name: NVIDIA Driver | Ubuntu Installation
+  block:
+
+    - name: NVIDIA Driver | Set facts
+      set_fact:
+        nvidia_driver_install_options: ""
+
+    - name: NVIDIA Driver | Check if driver deb is installed
+      shell: |
+        dpkg -I '{{ remote_temp_driver_dir }}/{{ nvidia_driver_name }}' | grep Package: | sed -r 's/ Package:\s+(.*)/\1/g' | xargs dpkg -s
+      failed_when: false
+      register: dpkg_check_r
+
+    - name: NVIDIA Driver | Set facts
+      set_fact:
+        deb_installed: "{{ dpkg_check_r.rc == 0 and 'install ok installed' in dpkg_check_r.stdout}}"
+
+    - name: NVIDIA Driver | Set install flag
+      set_fact:
+        install_driver: "{{ not deb_installed or reinstall_nvidia_driver }}"
+
+    - name: NVIDIA Driver | Install driver deb
+      command: dpkg -i {{nvidia_driver_install_options}} "{{ remote_temp_driver_dir }}/{{ nvidia_driver_name }}"
+      register: install_deb_r
+      failed_when: install_deb_r.rc != 0
+      changed_when: install_deb_r.rc == 0
+      when: install_driver
+
+    - name: NVIDIA Driver | Install CUDA public GPG key
+      command: apt-key adv --fetch-keys "{{nvidia_ubuntu_keys_url}}"
+      when: install_driver
+
+    - name: NVIDIA Driver | Update
+      command: "{{ ansible_pkg_mgr }} update -y"
+      when: install_driver
+
+    - name: NVIDIA Driver | Install CUDA drivers
+      command: "{{ ansible_pkg_mgr }} install -y cuda-drivers"
+      when: install_driver
+
+    - name: NVIDIA Driver | Set reboot flag
+      set_fact:
+        reboot_system: true
+      when: install_driver
+
+  become: yes
+  when: ansible_distribution in ["Ubuntu"]
+
+- name: NVIDIA Driver | Reboot immediately if there was a change.
+  shell: "sleep 5 && reboot"
+  async: 1
+  poll: 0
+  when: reboot_system
+
+- name: NVIDIA Driver | Wait for the reboot to complete if there was a change.
+  wait_for_connection:
+    connect_timeout: 20
+    sleep: 5
+    delay: 5
+    timeout: 300
+  when: reboot_system
+
+- name: NVIDIA Driver | Get module list
+  shell: lsmod | sed 1d | cut -d' ' -f1
+  check_mode: no
+  register: module_list
+
+- name: NVIDIA Driver | Init NVIDIA driver fact
+  set_fact:
+    nvidia_module_loaded: false
+
+- name: NVIDIA Driver | Set NVIDIA driver fact
+  set_fact:
+    nvidia_module_loaded: true
+  when: "'nvidia' in module_list.stdout_lines"
+
+- name: NVIDIA Driver | Check if NVIDIA driver is loaded
+  fail:
+    msg: "NVIDIA driver is not loaded !"
+  when: not nvidia_module_loaded
+
+# - name: NVIDIA Driver | Run driver installer
+#   command: /usr/bin/sh "{{ remote_temp_driver_dir }}/{{ nvidia_driver_name }}" --silent --dkms
+#   when: not nvidia_module_loaded
+
+# - name: NVIDIA Driver | Touch black list file
+#   shell: "if [ ! -e /etc/modprobe.d/blacklist.conf ]; then touch /etc/modprobe.d/blacklist.conf; fi"
+
+# - name: NVIDIA Driver | Add nouveau to black list
+#   lineinfile: dest=/etc/modprobe.d/blacklist.conf regexp="^blacklist nouveau" line="blacklist nouveau"
+
+# - name: NVIDIA Driver | Check if GRUB_CMDLINE_LINUX is in grub file
+#   command: grep -q "^GRUB_CMDLINE_LINUX=" /etc/sysconfig/grub
+#   register: grub_cmdline_check
+#   always_run: True
+#   ignore_errors: True
+
+# - name: NVIDIA Driver | Check if rd.driver.blacklist=nouveau is defined in GRUB_CMDLINE_LINUX
+#   command: grep -q "^GRUB_CMDLINE_LINUX=.*rd[.]driver[.]blacklist=nouveau.*$" /etc/sysconfig/grub
+#   register: grub_cmdline_black_list_check
+#   always_run: True
+#   ignore_errors: True
+
+# - name: NVIDIA Driver | Add blacklist parameter to grub
+#   lineinfile: dest=/etc/sysconfig/grub regexp='^GRUB_CMDLINE_LINUX="(.*)"$' line='GRUB_CMDLINE_LINUX="\1 rd.driver.blacklist=nouveau"' backrefs=yes
+#   when: grub_cmdline_check.rc == 0 and grub_cmdline_black_list_check.rc != 0
+
+# - name: NVIDIA Driver | Add command line params to grub
+#   lineinfile: dest=/etc/sysconfig/grub line='GRUB_CMDLINE_LINUX="rd.driver.blacklist=nouveau"'
+#   when: grub_cmdline_check.rc != 0
+
+# - name: Get boot command line
+#   command: cat /proc/cmdline
+#   register: boot_cmdline
+#   always_run: yes
+
+# - name: NVIDIA Driver | Init grub reconfiguration fact
+#   set_fact:
+#     grub_reconfig: false
+
+# - name: NVIDIA Driver | Set grub reconfiguration fact
+#   set_fact:
+#     grub_reconfig: true
+#   when: "'rd.driver.blacklist=nouveau' not in boot_cmdline.stdout"
+
+# - name: NVIDIA Driver | Update grub2 config (BIOS)
+#   shell: grub2-mkconfig -o /boot/grub2/grub.cfg
+#   when: grub_reconfig
+
+# - name: NVIDIA Driver | Update grub2 config (UEFI)
+#   shell: grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg
+#   when: grub_reconfig
+
+# - name: NVIDIA Driver | Remove xorg-x11-drv-nouveau
+#   action: "{{ ansible_pkg_mgr }}"
+#   args:
+#     name: "{{ item }}"
+#     state: removed
+#   with_items:
+#     - xorg-x11-drv-nouveau
+
+# - name: NVIDIA Driver | Backup old initramfs nouveau image
+#   shell: |
+#       if [ ! -e /boot/initramfs-$(uname -r)-nouveau.img ]; then
+#         mv /boot/initramfs-$(uname -r).img /boot/initramfs-$(uname -r)-nouveau.img;
+#       fi
+#   when: grub_reconfig
+
+# - name: NVIDIA Driver | Create new initramfs image
+#   shell: "dracut -f /boot/initramfs-$(uname -r).img $(uname -r)"
+#   when: grub_reconfig
+
+# - name: NVIDIA Driver | Restart machine
+#   shell: sleep 2 && systemctl set-default multi-user.target && shutdown -r now "Ansible updates triggered"
+#   async: 1
+#   poll: 0
+#   become: true
+#   ignore_errors: true
+#   when: grub_reconfig
+
+# - name: NVIDIA Driver | Waiting for server to come back
+#   local_action: wait_for host={{ inventory_hostname }} state=started
+#   #delay=30 timeout=300
+#   become: false
+#   when: grub_reconfig
+
+# - name: NVIDIA Driver | Get module list
+#   shell: lsmod | sed 1d | cut -d' ' -f1
+#   always_run: yes
+#   register: module_list
+
+# - name: NVIDIA Driver | Init NVIDIA driver fact
+#   set_fact:
+#     nvidia_module_loaded: false
+
+# - name: NVIDIA Driver | Set NVIDIA driver fact
+#   set_fact:
+#     nvidia_module_loaded: true
+#   when: "'nvidia' in module_list.stdout_lines"
+
+# - name: Test
+#   debug: msg="nvidia_module_loaded={{ nvidia_module_loaded }}"
+
+# # - name: Assures NVIDIA Key dir exists
+# #   file: path={{ nvidia_driver_key_dir }} state=directory mode=0700
+
+# # - name: NVIDIA Driver | Create X.509 Configuration
+# #   template: src=x509-configuration.ini.j2 dest={{ nvidia_driver_key_dir }}/x509-configuration.ini
+# #   when: not nvidia_module_loaded
+
+# # - name: NVIDIA Driver | Generate keys
+# #   command: openssl req -x509 -new -nodes -utf8 -sha256 -days 36500 -batch -config '{{ nvidia_driver_key_dir}}/x509-configuration.ini' -outform DER -out '{{ nvidia_driver_key_dir}}/public_key.der' -keyout '{{ nvidia_driver_key_dir}}/private_key.priv'
+# #   when: not nvidia_module_loaded
+
+# - name: NVIDIA Driver | Run driver installer
+#   command: /usr/bin/sh "{{ remote_temp_driver_dir }}/{{ nvidia_driver_name }}" --silent --dkms
+#   when: not nvidia_module_loaded
+
+# - name: NVIDIA Driver | Restart machine after driver installation
+#   shell: sleep 2 && systemctl set-default graphical.target && shutdown -r now "Ansible updates triggered"
+#   async: 1
+#   poll: 0
+#   become: true
+#   ignore_errors: true
+#   when: not nvidia_module_loaded
+
+# - name: NVIDIA Driver | Waiting for server to come back after driver installation
+#   local_action: wait_for host={{ inventory_hostname }} state=started
+#   # delay=30 timeout=300
+#   become: false
+#   when: not nvidia_module_loaded
+
+# - name: NVIDIA Driver | Get module list after reboot
+#   shell: lsmod | sed 1d | cut -d' ' -f1
+#   always_run: yes
+#   register: module_list
+#   when: not nvidia_module_loaded
+
+# - name: Module list after reboot
+#   debug: msg="{{ module_list }}"
+
+# - name: NVIDIA Driver | Set NVIDIA driver fact
+#   set_fact:
+#     nvidia_module_loaded: true
+#   when: "not nvidia_module_loaded and 'nvidia' in module_list.stdout_lines"
+
+# - name: NVIDIA Driver | Install VDPAU/VAAPI support
+#   action: "{{ ansible_pkg_mgr }}"
+#   args:
+#     name: "{{ item }}"
+#     state: latest
+#   with_items:
+#     - libva-vdpau-driver
+#     - libva-utils
+#   when: nvidia_module_loaded
+
+# - name: NVIDIA Driver | Check if NVIDIA driver is loaded
+#   fail: msg="NVIDIA driver is not loaded !"
+#   when: not nvidia_module_loaded
