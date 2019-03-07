@@ -1,0 +1,9 @@
+---
+- hosts: nvidia_nodes
+  become: yes
+  roles:
+    - role: install-nvidia-driver
+      vars:
+        reinstall_nvidia_driver: false
+  tags:
+    - install-nvidia-driver
