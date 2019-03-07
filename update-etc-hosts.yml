@@ -1,0 +1,32 @@
+---
+- name: Update /etc/hosts
+  hosts: auto_etc_hosts
+  become: yes
+  tasks:
+    - name: "Hosts with auto-generated /etc/hosts"
+      debug: msg="items = {{groups['auto_etc_hosts']}}"
+
+    - name: Gather information
+      setup:
+      delegate_to: "{{item}}"
+      delegate_facts: True
+      with_items: "{{ groups['auto_etc_hosts'] }}"
+
+    - name: DEBUG
+      debug: msg="item = {{item}}, host_aliases = {{ hostvars[item].host_aliases|default('') }}, address = {{ hostvars[item].ansible_default_ipv4|default(omit) }}"
+      with_items: "{{ groups['auto_etc_hosts'] }}"
+
+    - name: "Remove hosts"
+      lineinfile: dest=/etc/hosts regexp='^\S+\s+{{ item }}(\s.*)?$' state=absent
+      with_items: "{{groups['auto_etc_hosts']}}"
+
+    - name: "Add mappings to /etc/hosts"
+      blockinfile:
+        dest: /etc/hosts
+        block: |
+          {% for item in groups['auto_etc_hosts'] %}
+          {% set host_interface = hostvars[item].host_interface | default( hostvars[item].ansible_default_ipv4.alias ) %}
+          {% set host_ipv4 = hostvars[item].host_ipv4 | default( hostvars[item]['ansible_' + host_interface]['ipv4']['address'] ) %}
+          {{ host_ipv4 }} {{item}} {{ hostvars[item].host_aliases|default('') }}
+          {% endfor %}
+        marker: "# Ansible inventory hosts {mark}"
