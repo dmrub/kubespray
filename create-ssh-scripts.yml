@@ -4,18 +4,69 @@
   vars:
     - dest_dir: "."
   tasks:
+    - name: Collect minimal facts
+      setup:
+        gather_subset:
+          - '!all'
+      delegate_to: localhost
+
+    # - name: DEBUG
+    #   debug:
+    #     var: hostvars[item]['ansible_ssh_common_args']
+    #   loop: "{{ groups['all'] }}"
+    #   when: hostvars[item]['ansible_ssh_common_args'] is defined
+
+    - name: Run python script with ansible interpreter
+      script: "{{ playbook_dir }}/ssh-args-to-config.py {{ hostvars[item]['ansible_ssh_common_args'] }}"
+      args:
+        executable: "{{ansible_python.executable}}"
+      delegate_to: localhost
+      register: ssh_config_r
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item]['ansible_ssh_common_args'] is defined
+
+    #- name: DEBUG
+    #  debug:
+    #    var: ssh_config_r
+
+    - name: Populate ssh config
+      set_fact:
+        ssh_config: "{{ ssh_config|default({}) | combine( {item.item: item.stdout} ) }}"
+      with_items: "{{ ssh_config_r.results }}"
+      when: item.changed
+
+    #- name: DEBUG
+    #  debug:
+    #    var: ssh_config
+
     - name: Create ssh config file in ssh-config
       copy:
         content: |
           {% for host in groups['all'] %}
+            {% if hostvars[host]['ansible_connection'] | default('ssh', true) == 'ssh' %}
+              {% if hostvars[host]['ansible_host'] is not defined and hostvars[host]['ansible_ssh_host'] is defined %}
+              {% set ansible_host = hostvars[host]['ansible_ssh_host'] %}
+              {% else %}
+              {% set ansible_host = hostvars[host]['ansible_host'] | mandatory %}
+              {% endif %}
+              {% if hostvars[host]['ansible_user'] is not defined and hostvars[host]['ansible_ssh_user'] is defined %}
+              {% set ansible_user = hostvars[host]['ansible_ssh_user'] %}
+              {% else %}
+              {% set ansible_user = hostvars[host]['ansible_user'] | mandatory %}
+              {% endif %}
+
           Host {{ host }}
-            HostName {{ hostvars[host]['ansible_host'] | default(hostvars[host]['ansible_ssh_host'], true) }}
-            User {{ hostvars[host]['ansible_user'] | default(hostvars[host]['ansible_ssh_user'], true) }}
+            HostName {{ ansible_host }}
+            User {{ ansible_user }}
             Port {{ hostvars[host]['ansible_port'] | default(22, true) }}
             UserKnownHostsFile /dev/null
             StrictHostKeyChecking no
             PasswordAuthentication no
-            IdentityFile {{ hostvars[host]['ansible_ssh_private_key_file'] }}
+            IdentityFile {{ hostvars[host]['ansible_ssh_private_key_file'] | mandatory }}
+            {% if ssh_config[host] is defined %}
+          {{ ssh_config[host] }}
+            {% endif %}
+            {% endif %}
           {% endfor %}
         dest: "{{ dest_dir }}/ssh-config"
         mode: 0600
@@ -23,30 +74,27 @@
       copy:
         content: |
           #!/bin/bash
-          THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
+          THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
           set -xe
-          ssh -F "$THIS_DIR/ssh-config" {{ansible_ssh_common_args}} "$@"
+          ssh -F "$THIS_DIR/ssh-config" "$@"
+
         dest: "{{ dest_dir }}/run-ssh.sh"
         mode: 0755
     - name: Create scp script in run-scp.sh
       copy:
         content: |
           #!/bin/bash
-          THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
+          THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
           set -xe
-          scp -F "$THIS_DIR/ssh-config" {{ansible_ssh_common_args}} "$@"
+          scp -F "$THIS_DIR/ssh-config" "$@"
         dest: "{{ dest_dir }}/run-scp.sh"
         mode: 0755
-    - name: Set remote shell var
-      set_fact:
-        rsh_args: "{{ansible_ssh_common_args}}"
     - name: Create rsync script in run-rsync.sh
       copy:
         content: |
           #!/bin/bash
-          THIS_DIR=$( (cd "$(dirname -- "$BASH_SOURCE")" && pwd -P) )
-          RSH_ARGS={{ rsh_args | quote }}
-          RSH="ssh -F '$THIS_DIR/ssh-config' ${RSH_ARGS}"
+          THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
+          RSH="ssh -F '$THIS_DIR/ssh-config'"
           set -xe
           rsync -avhe "$RSH" --stats --progress "$@"
         dest: "{{ dest_dir }}/run-rsync.sh"
