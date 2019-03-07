@@ -1,0 +1,9 @@
+---
+- hosts: nvidia_nodes
+  become: yes
+  roles:
+    - role: install-nvidia-docker
+      vars:
+        reinstall_nvidia_docker: false
+  tags:
+    - install-nvidia-docker
