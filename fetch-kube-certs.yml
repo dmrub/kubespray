@@ -1,0 +1,26 @@
+- hosts: kube-master
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  tags:
+    - client
+  roles:
+    - { role: kubespray-defaults}
+  vars_files:
+    - roles/kubernetes/client/defaults/main.yml
+  tasks:
+
+    - name: Copy kubernetes CA certificate to ansible host
+      fetch:
+        src: "{{ kube_cert_dir }}/ca.crt"
+        dest: "{{ artifacts_dir }}/ca.crt"
+        flat: yes
+        validate_checksum: no
+      run_once: yes
+
+    - name: Copy kubernetes CA key to ansible host
+      fetch:
+        src: "{{ kube_cert_dir }}/ca.key"
+        dest: "{{ artifacts_dir }}/ca.key"
+        flat: yes
+        validate_checksum: no
+      run_once: yes
