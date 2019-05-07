@@ -88,6 +88,18 @@ def realpath_if(path):
     return path
 
 
+def dirname_if(path):
+    if path:
+        return os.path.dirname(path)
+    return path
+
+
+def sep_at_end(path):
+    if not path.endswith(os.sep):
+        path += os.sep
+    return path
+
+
 def backup_file(path):
     rpath = os.path.realpath(path)
     if os.path.exists(rpath):
@@ -415,11 +427,23 @@ User's ansible vault file:     {CFG_VAULT_FILE}
         ))
 
     def print_shell_vars(self, vars):
+        inventory_dir = sep_at_end(realpath_if(dirname_if(self.get_ansible_inventory())))
+        group_vars_dir = sep_at_end(os.path.join(inventory_dir, 'group_vars'))
+        host_vars_dir = sep_at_end(os.path.join(inventory_dir, 'host_vars'))
+
         default_modif = EXPORT_SHELL_VARS.get(None)
         for k, v in iteritems(vars):
             modif = EXPORT_SHELL_VARS.get(k, default_modif)
             for mf in modif:
                 v = mf(v)
+            if k in ('CFG_VARS_FILE', 'CFG_VAULT_FILE'):
+                if v.startswith(group_vars_dir):
+                    print('# {} variable or vault file is in group_vars inventory directory'.format(v))
+                    continue
+                if v.startswith(host_vars_dir):
+                    print('# {} variable or vault file is in host_vars inventory directory'.format(v))
+                    continue
+
             print("{}={}".format(k, shlex_quote(v)))
 
     def print_shell_config(self):
