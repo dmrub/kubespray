@@ -1,4 +1,4 @@
-#!/bin/bash
+# shellcheck shell=bash
 ROOT_DIR=$THIS_DIR/..
 CFG_CONFIG_FILE=${CFG_CONFIG_FILE:-$ROOT_DIR/config.yml}
 CFG_CONFIG_FILE_DIR=$(dirname "$CFG_CONFIG_FILE")
@@ -73,30 +73,69 @@ ansible_playbook() {
     local inventory=$1
     check-config
     check-inventory "$inventory"
-    echo "+ ansible-playbook -i $*"
+    if [[ -z "$NO_ECHO" ]]; then
+        echo >&2 "+ ansible-playbook -i $*"
+    fi
     ansible-playbook -i "$@"
 }
 
-run-ansible() {
-    local opts
-    opts=()
+add-inventory-to-opts() {
+    # opts array is defined outside
+    if [[ -n "$ANSIBLE_INVENTORY" ]]; then
+        opts+=(-i "$ANSIBLE_INVENTORY")
+    fi
+}
+
+add-remote-user-to-opts() {
+    # opts array is defined outside
     if [[ -n "$ANSIBLE_REMOTE_USER" ]]; then
         opts+=(--user "$ANSIBLE_REMOTE_USER")
     fi
+}
+
+add-extra-vars-to-opts() {
+    # opts array is defined outside
     if [[ -e "$CFG_VAULT_FILE" ]]; then
         opts+=(--extra-vars @"$CFG_VAULT_FILE")
     fi
     if [[ -e "$CFG_VARS_FILE" ]]; then
         opts+=(--extra-vars @"$CFG_VARS_FILE")
     fi
+}
 
-    echo "+ ansible -i \"$ANSIBLE_INVENTORY\" \
+run-ansible-cmd() {
+    # opts array is defined outside
+    local cmd
+    cmd=$1
+    shift
+
+    if [[ -z "$NO_ECHO" ]]; then
+        echo >&2 "+ ${cmd} \
 ${opts[*]} \
 $*"
+    fi
+    "${cmd}" \
+        "${opts[@]}" \
+        "$@"
+}
 
-    ansible -i "$ANSIBLE_INVENTORY" \
-            "${opts[@]}" \
-            "$@"
+run-ansible() {
+    local opts
+    opts=()
+    add-inventory-to-opts
+    add-remote-user-to-opts
+    add-extra-vars-to-opts
+
+    run-ansible-cmd ansible "$@"
+}
+
+run-ansible-inventory() {
+    local opts
+    opts=()
+    add-inventory-to-opts
+    # remote user and extra vars are not supported by ansible-inventory
+
+    run-ansible-cmd ansible-inventory "$@"
 }
 
 run-ansible-playbook() {
@@ -105,21 +144,11 @@ run-ansible-playbook() {
 
     local opts
     opts=()
-    if [[ -n "$ANSIBLE_REMOTE_USER" ]]; then
-        opts+=(--user "$ANSIBLE_REMOTE_USER")
-    fi
-    if [[ -e "$CFG_VAULT_FILE" ]]; then
-        opts+=(--extra-vars @"$CFG_VAULT_FILE")
-    fi
-    if [[ -e "$CFG_VARS_FILE" ]]; then
-        opts+=(--extra-vars @"$CFG_VARS_FILE")
-    fi
-    echo "+ ansible-playbook --inventory \"$ANSIBLE_INVENTORY\" \
-${opts[*]} \
-$*"
-    ansible-playbook --inventory "$ANSIBLE_INVENTORY" \
-                     "${opts[@]}" \
-                     "$@"
+    add-inventory-to-opts
+    add-remote-user-to-opts
+    add-extra-vars-to-opts
+
+    run-ansible-cmd ansible-playbook "$@"
 }
 
 # $1 - filename
@@ -148,8 +177,9 @@ read-config-file() {
     done <<<"$cfg"
 }
 
+CFG_SHELL_CONFIG=$("$THIS_DIR/configure.py" --shell-config)
 
-eval "$("$THIS_DIR/configure.py" --shell-config)"
+eval "$CFG_SHELL_CONFIG"
 
 #if [[ -e "$CFG_CONFIG_FILE" ]]; then
 #    read-config-file "$CFG_CONFIG_FILE" "CFG_"
