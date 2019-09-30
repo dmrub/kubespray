@@ -2,6 +2,8 @@
 
 THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P))
 
+set -eo pipefail
+
 # shellcheck source=init-env.sh
 source "$THIS_DIR/init-env.sh"
 
@@ -125,7 +127,9 @@ if [[ -n "$USER_PASSWORD" ]]; then
     echo "And set user password"
 fi
 
-USER_PUBLIC_KEY_FILE=$(abspath "$USER_PUBLIC_KEY_FILE")
+if [[ -n "$USER_PUBLIC_KEY_FILE" ]]; then
+    USER_PUBLIC_KEY_FILE=$(abspath "$USER_PUBLIC_KEY_FILE")
+fi
 
 jsquote() {
     local arg=$1
