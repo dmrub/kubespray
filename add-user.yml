@@ -3,8 +3,10 @@
   vars_prompt:
     - name: "user_name"
       prompt: "User name"
+      private: no
     - name: "user_groups"
       prompt: "User groups (separated by comma)"
+      private: no
     - name: "user_password"
       prompt: "User password"
       private: yes
