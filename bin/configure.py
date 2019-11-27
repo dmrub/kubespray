@@ -613,6 +613,12 @@ User's ansible vault file:       {CFG_VAULT_FILE}
     def print_yaml_config(self):
         print(yaml.dump(self.config_vars, Dumper=Dumper))
 
+    def has_ansible_vault_files(self):
+        vault_fn = self.get_vault_file()
+        if vault_fn and os.path.exists(vault_fn):
+            return True
+        return False
+
     def run_ansible_vault(self, command, check_call=False, stderr=None):
         cmd_args = ['ansible-vault', command]
         self.add_ansible_vault_password_file_args(cmd_args)
@@ -776,16 +782,49 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
     readline.parse_and_bind("tab: complete")
 
     if args.view_vault:
+        vault_fn = config.get_vault_file()
+        if not vault_fn:
+            LOG.error("No ansible vault file is configured")
+            return 1
+        if not os.path.exists(vault_fn):
+            LOG.error("Ansible vault file %s doesn't exist !", vault_fn)
+            LOG.error("Run --edit-vault command.")
+            return 1
         return config.run_ansible_vault('view', check_call=True)
 
     if args.decrypt_vault:
+        vault_fn = config.get_vault_file()
+        if not vault_fn:
+            LOG.error("No ansible vault file is configured")
+            return 1
+        if not os.path.exists(vault_fn):
+            LOG.error("Ansible vault file %s doesn't exist !", vault_fn)
+            LOG.error("Run --edit-vault command.")
+            return 1
         return config.run_ansible_vault('decrypt', check_call=True)
 
     if args.encrypt_vault:
+        vault_fn = config.get_vault_file()
+        if not vault_fn:
+            LOG.error("No ansible vault file is configured")
+            return 1
+        if not os.path.exists(vault_fn):
+            LOG.error("Ansible vault file %s doesn't exist !", vault_fn)
+            LOG.error("Run --edit-vault command.")
+            return 1
         return config.run_ansible_vault('encrypt', check_call=False, stderr=DEVNULL)
 
     if args.edit_vault:
-        return config.run_ansible_vault('edit', check_call=False, stderr=DEVNULL)
+        vault_fn = config.get_vault_file()
+        if not vault_fn:
+            LOG.error("No ansible vault file is configured")
+            return 1
+        if not os.path.exists(vault_fn):
+            LOG.warning("Ansible vault file %s doesn't exist !", vault_fn)
+            LOG.warning("I will create it !")
+            return config.run_ansible_vault('create', check_call=True)
+        else:
+            return config.run_ansible_vault('edit', check_call=True)
 
     if not os.path.isdir(CONFIG_DIR):
         LOG.info('Create directory: %r', CONFIG_DIR)
