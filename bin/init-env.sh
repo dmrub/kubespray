@@ -173,7 +173,6 @@ run-ansible-vault() {
     run-ansible-cmd ansible-vault "$@"
 }
 
-
 run-ansible-playbook() {
     check-config
 
@@ -185,6 +184,13 @@ run-ansible-playbook() {
     add-extra-vars-to-opts
 
     run-ansible-cmd ansible-playbook "$@"
+}
+
+run-ansible-galaxy() {
+    local opts
+    opts=()
+
+    run-ansible-cmd ansible-galaxy "$@"
 }
 
 # $1 - filename
