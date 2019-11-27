@@ -44,3 +44,23 @@
       command: systemctl disable rolekit
       when: has_firewalld
       ignore_errors: yes
+
+    - name: Check if ufw is installed
+      command: "ufw --version"
+      register: ufw_version_result
+      failed_when: false
+      changed_when: false
+
+    - name: Disable ufw
+      when: ufw_version_result.rc == 0 and 'ufw' in ufw_version_result.stdout
+      block:
+        - name: Disable ufw
+          command: ufw disable
+
+        - name: Check ufw status
+          command: ufw status
+          register: ufw_status_result
+
+        - name: Print ufw status
+          debug:
+            var: ufw_status_result.stdout
