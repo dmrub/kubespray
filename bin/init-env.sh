@@ -3,6 +3,17 @@ ROOT_DIR=$THIS_DIR/..
 CFG_CONFIG_FILE=${CFG_CONFIG_FILE:-$ROOT_DIR/config.yml}
 CFG_CONFIG_FILE_DIR=$(dirname "$CFG_CONFIG_FILE")
 
+# Detect python excutable
+PY=python # default fallback
+for _PY in python python3 python2; do
+    if command -v "$_PY" >/dev/null 2>&1; then
+      PY=$(command -v "$_PY")
+      break
+    fi
+done
+unset _PY
+
+
 ANSIBLE_DIR=$ROOT_DIR
 ANSIBLE_PLAYBOOKS_DIR=$ANSIBLE_DIR
 ANSIBLE_INVENTORY_DIR=$ROOT_DIR/inventory
@@ -28,7 +39,7 @@ fatal() {
 
 abspath() {
     readlink -f "${1}" 2>/dev/null || \
-        python -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${1}"
+        "$PY" -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${1}"
 }
 
 join_by() {
@@ -219,7 +230,6 @@ read-config-file() {
     done <<<"$cfg"
 }
 
-CFG_SHELL_CONFIG=$("$THIS_DIR/configure.py" --shell-config)
+CFG_SHELL_CONFIG=$("$PY" "$THIS_DIR/configure.py" --shell-config)
 
 eval "$CFG_SHELL_CONFIG"
-
