@@ -32,9 +32,9 @@ except ImportError:
     DEVNULL = open(os.devnull, 'wb')
 
 try:
-    from yaml import CLoader as Loader, CDumper as Dumper
+    from yaml import CSafeLoader as Loader, CDumper as Dumper
 except ImportError:
-    from yaml import Loader, Dumper
+    from yaml import SafeLoader as Loader, Dumper
 
 
 def diff_dicts(dict_a, dict_b):
