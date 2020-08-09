@@ -1,0 +1,34 @@
+- hosts: localhost
+  connection: local
+  tasks:
+
+    - name: Run kubectl
+      shell: "{{ playbook_dir }}/bin/kubectl.sh get svc -n {{ netcheck_namespace | default('default') }} netchecker-service -o go-template  --template {% raw %}'{{ range .spec.ports}}{{ .nodePort }} {{ end }}'{% endraw %}"
+      changed_when: False
+      failed_when: "kubectl_output.stdout.split() | length == 0"
+      register: kubectl_output
+
+    - name: Set variables for all k8s-cluster hosts
+      # https://medium.com/opsops/pocking-into-others-hostvars-69475ff0a8cf
+      set_fact:
+        node_ports: "{{ kubectl_output.stdout.split() }}"
+      delegate_facts: yes
+      delegate_to: '{{ item }}'
+      loop: "{{ groups['k8s-cluster'] }}"
+
+- hosts: k8s-cluster
+  tasks:
+    - name: Check connectivity with netchecker
+      uri:
+        url: "http://127.0.0.1:{{ item }}/api/v1/connectivity_check"
+      register: netcheck_result
+      loop: "{{ node_ports }}"
+
+    - name: Collect results
+      set_fact:
+        report: "{{ (report | default([])) + [item.json] }}"
+      loop: "{{ netcheck_result.results }}"
+
+    - name: Print netchecker report
+      debug:
+        msg: "{{ report }}"
