@@ -1,1 +1,3 @@
 ---
+nvidia_cuda_container: "nvidia/cuda:latest"
+#nvidia_cuda_container: "nvidia/cuda:11.0-devel"
