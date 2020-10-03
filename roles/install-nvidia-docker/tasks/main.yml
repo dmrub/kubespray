@@ -101,7 +101,7 @@
   become: yes
 
 - name: nvidia-docker | Test nvidia-docker 1
-  command: docker run --runtime=nvidia --rm nvidia/cuda nvidia-smi
+  command: docker run --runtime=nvidia --rm {{ nvidia_cuda_container | quote }} nvidia-smi
   become: yes
   failed_when: false
   register: result
@@ -113,7 +113,7 @@
   register: result
 
 - name: nvidia-docker | Test nvidia-docker 2
-  command: docker run --runtime=nvidia --rm nvidia/cuda nvidia-smi
+  command: docker run --runtime=nvidia --rm {{ nvidia_cuda_container | quote }} nvidia-smi
   become: yes
   register: result
   when: result is changed
