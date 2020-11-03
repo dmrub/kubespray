@@ -1,4 +1,8 @@
-- hosts: etcd
+---
+- name: Check ansible version
+  import_playbook: ansible_version.yml
+
+- hosts: "{{ groups['etcd'] | first }}"
   any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
   become: true
   tags:
@@ -13,7 +17,24 @@
     - import_tasks: roles/etcd/handlers/backup.yml
   tasks:
 
-    - import_tasks: roles/etcd/tasks/set_cluster_health.yml
+    # - import_tasks: roles/etcd/tasks/set_cluster_health.yml
+
+    - name: Configure | Check if etcd cluster is healthy  # noqa 306
+      shell: "{{ bin_dir }}/etcdctl endpoint --cluster status && {{ bin_dir }}/etcdctl endpoint --cluster health  2>&1 | grep -q -v 'Error: unhealthy cluster'"
+      register: etcd_cluster_is_healthy
+      failed_when: false
+      changed_when: false
+      check_mode: no
+      run_once: yes
+      when: is_etcd_master
+      tags:
+        - facts
+      environment:
+        ETCDCTL_API: 3
+        ETCDCTL_CERT: "{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}.pem"
+        ETCDCTL_KEY: "{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}-key.pem"
+        ETCDCTL_CACERT: "{{ etcd_cert_dir }}/ca.pem"
+        ETCDCTL_ENDPOINTS: "{{ etcd_access_addresses }}"
 
     - name: Backup all etcd data
       command: /bin/true
@@ -35,7 +56,7 @@
         flat: yes
         validate_checksum: no
       become: no
-      
+
     - name: Remove etcd backup tarball
       file:
         path: "/tmp/etcd-backup-{{ inventory_hostname }}.tar.gz"
