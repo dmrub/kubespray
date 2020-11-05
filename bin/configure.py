@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Ansible/Kubespray configurator"""
 
@@ -19,10 +19,9 @@ import hashlib
 import os.path
 import difflib
 import pprint
-from six import iteritems
-from six.moves import input
-from six.moves import shlex_quote
+import shlex
 import yaml
+import itertools
 
 try:
     from subprocess import DEVNULL  # pylint: disable=ungrouped-imports
@@ -69,6 +68,7 @@ ANSIBLE_ROLES_PATH = os.getenv('ANSIBLE_ROLES_PATH', os.path.join(ANSIBLE_DIR, '
 CFG_VAULT_FILE = os.path.join(ROOT_DIR, 'ansible-vault.yml')
 CFG_VARS_FILE = os.path.join(ROOT_DIR, 'ansible-vars.yml')
 CONFIG_VARS_FILE = os.path.join(ROOT_DIR, 'config.yml')
+CFG_VARS_CACHE_FILE = os.path.join(ROOT_DIR, 'ansible-vars.cache')
 
 
 def is_sequence(value):
@@ -93,8 +93,47 @@ def rlinput(prompt, prefill=''):
         readline.set_startup_hook()
 
 
+def rlselect(prompt, words, print_menu_on_empty_input=True, print_menu_before_prompt=False, prefill=''):
+    value = ''
+    while True:
+        if print_menu_before_prompt or (print_menu_on_empty_input and value == ''):
+            for i, word in enumerate(words):
+                print("{}) {}".format(i + 1, word), file=sys.stderr)
+        value = rlinput(prompt, prefill=prefill)
+        if value == '':
+            continue
+        try:
+            j = int(value)
+        except ValueError:
+            yield -1, value
+        else:
+            if j < 1 or j > len(words):
+                yield -1, value
+            else:
+                yield j - 1, words[j - 1]
+
+
 def randpw(size=16, chars='_' + string.ascii_uppercase + string.ascii_lowercase + string.digits):
     return ''.join(random.SystemRandom().choice(chars) for _ in range(size))
+
+
+def relpaths(base_path, paths, no_parent_dirs=False):
+    base_path = os.path.realpath(base_path)
+    for path in paths:
+        relative_path = os.path.relpath(path, base_path)
+        if no_parent_dirs and relative_path.startswith(os.pardir):
+            relative_path = os.path.realpath(relative_path)
+        yield relative_path
+
+
+def auto_realpath(path, root_dir):
+    if os.path.exists(path):
+        path = os.path.realpath(path)
+    else:
+        abs_path = os.path.join(root_dir, path)
+        if os.path.exists(abs_path):
+            path = os.path.realpath(abs_path)
+    return path
 
 
 def foreach(value, func):
@@ -113,6 +152,41 @@ def realpath_if(path):
 
 def array_realpath_if(paths):
     return foreach(paths, realpath_if)
+
+
+def realpath_auto_if(path):
+    return auto_realpath(path, ROOT_DIR) if path else path
+
+
+def array_realpath_auto_if(paths):
+    return foreach(paths, realpath_auto_if)
+
+
+def vault_id_source(vault_id):
+    if '@' in vault_id:
+        label, source = vault_id.split('@', 1)
+        return source
+    return None
+
+def vault_id_label(vault_id):
+    if '@' in vault_id:
+        label, source = vault_id.split('@', 1)
+        return label
+    return None
+
+
+def realpath_vault_id_if(vault_id):
+    if vault_id:
+        if '@' in vault_id:
+            label, source = vault_id.split('@', 1)
+            if source != 'prompt':
+                source = auto_realpath(source, ROOT_DIR)
+                vault_id = label + '@' + source
+    return vault_id
+
+
+def array_realpath_vault_id_if(vault_ids):
+    return foreach(vault_ids, realpath_vault_id_if)
 
 
 def dirname_if(path):
@@ -155,7 +229,7 @@ def load_config(file_name, defaults=None, fix_config_vars_func=None):
     :return: dictionary of loaded variables
     """
     config_vars = {}
-    if os.path.exists(file_name):
+    if file_name and os.path.exists(file_name):
         # noinspection PyBroadException
         try:
             with open(file_name, 'r', encoding='utf-8') as config_vars_file:
@@ -168,7 +242,7 @@ def load_config(file_name, defaults=None, fix_config_vars_func=None):
     if fix_config_vars_func:
         fix_config_vars_func(config_vars)
     if defaults:
-        for key, value in iteritems(defaults):
+        for key, value in defaults.items():
             if key not in config_vars:
                 config_vars[key] = value
     return config_vars
@@ -209,35 +283,44 @@ def array_join_comma(arr):
 # name -> [modifiers]
 PATH_MOD = (realpath_if, none_to_empty_str)
 ARRAY_PATH_MOD = (array_realpath_if, array_none_to_empty_str)
+OPTIONAL_PATH_MOD = (realpath_auto_if, none_to_empty_str)
+ARRAY_OPTIONAL_PATH_MOD = (array_realpath_auto_if, array_none_to_empty_str)
 EXPORT_SHELL_VARS = {
     None: (none_to_empty_str,),
     'ANSIBLE_CONFIG': PATH_MOD,
     'CFG_ANSIBLE_INVENTORIES': ARRAY_PATH_MOD,
     'ANSIBLE_ROLES_PATH': PATH_MOD,
-    'CFG_VAULT_FILE': PATH_MOD,
-    'CFG_VARS_FILE': PATH_MOD,
+    'CFG_VAULT_FILES': ARRAY_PATH_MOD,
+    'CFG_VARS_FILES': ARRAY_PATH_MOD,
     'ANSIBLE_FILTER_PLUGINS': PATH_MOD,
     'ANSIBLE_VAULT_PASSWORD_FILE': PATH_MOD,
     'ANSIBLE_PRIVATE_KEY_FILE': PATH_MOD,
+    'CFG_ANSIBLE_VAULT_IDS': (array_realpath_vault_id_if, array_none_to_empty_str)
 }
 
 CONFIG_PATH_VAR_NAMES = {
     'ANSIBLE_CONFIG', 'ANSIBLE_ROLES_PATH',
-    'CFG_VAULT_FILE', 'CFG_VARS_FILE', 'CFG_ANSIBLE_INVENTORIES',
+    'CFG_VAULT_FILES', 'CFG_VARS_FILES',
+    'CFG_ANSIBLE_INVENTORIES',
     'CFG_ANSIBLE_VAULT_PASSWORD_FILES',
+    'CFG_USER_SCRIPTS',
     'ANSIBLE_FILTER_PLUGINS',
     'ANSIBLE_PRIVATE_KEY_FILE'
 }
 
 CONFIG_ARRAY_VAR_NAMES = {
     'CFG_ANSIBLE_INVENTORIES',
-    'CFG_ANSIBLE_VAULT_PASSWORD_FILES'
+    'CFG_ANSIBLE_VAULT_PASSWORD_FILES',
+    'CFG_ANSIBLE_VAULT_IDS',
+    'CFG_VAULT_FILES',
+    'CFG_VARS_FILES',
+    'CFG_USER_SCRIPTS'
 }
 
 
 def fix_path(path, root_dir):
     if path and not os.path.isabs(path):
-        return os.path.realpath(os.path.join(root_dir, path))
+        return auto_realpath(path, root_dir)
     return path
 
 
@@ -290,6 +373,8 @@ def convert_single_value_to_list(vars_dict, src_var_name, dest_var_name):
 def upgrade_config_vars(vars_dict):
     convert_single_value_to_list(vars_dict, 'ANSIBLE_INVENTORY', 'CFG_ANSIBLE_INVENTORIES')
     convert_single_value_to_list(vars_dict, 'ANSIBLE_VAULT_PASSWORD_FILE', 'CFG_ANSIBLE_VAULT_PASSWORD_FILES')
+    convert_single_value_to_list(vars_dict, 'CFG_VAULT_FILE', 'CFG_VAULT_FILES')
+    convert_single_value_to_list(vars_dict, 'CFG_VARS_FILE', 'CFG_VARS_FILES')
 
 
 # https://stackoverflow.com/questions/377017/test-if-executable-exists-in-python
@@ -302,7 +387,7 @@ def which(program):
         if is_executable_file(program):
             return program
     else:
-        for path in os.environ["PATH"].split(os.pathsep):
+        for path in os.getenv("PATH", "").split(os.pathsep):
             exe_file = os.path.join(path, program)
             if is_executable_file(exe_file):
                 return exe_file
@@ -313,7 +398,7 @@ def which(program):
 class Config(object):  # pylint: disable=too-many-public-methods
     """Config class represents Ansible configuration"""
 
-    def __init__(self, debug_mode=False): # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    def __init__(self, debug_mode=False):  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         self.debug_mode = debug_mode
 
         def fix_config_vars(config_vars):
@@ -324,17 +409,22 @@ class Config(object):  # pylint: disable=too-many-public-methods
         self.config_vars = load_config(CONFIG_VARS_FILE, defaults={
             'CFG_ANSIBLE_INVENTORIES': [ANSIBLE_INVENTORY_DIR],
             'CFG_ANSIBLE_VAULT_PASSWORD_FILES': [ANSIBLE_VAULT_PASSWORD_FILE],
+            'CFG_ANSIBLE_VAULT_IDS': [],
+            'CFG_USER_SCRIPTS': [],
             'ANSIBLE_CONFIG': ANSIBLE_CONFIG,
             'ANSIBLE_FILTER_PLUGINS': ANSIBLE_FILTER_PLUGINS,
             'ANSIBLE_ROLES_PATH': ANSIBLE_ROLES_PATH,
-            'CFG_VAULT_FILE': CFG_VAULT_FILE,
-            'CFG_VARS_FILE': CFG_VARS_FILE
+            'CFG_VAULT_FILES': [CFG_VAULT_FILE],
+            'CFG_VARS_FILES': [CFG_VARS_FILE]
         }, fix_config_vars_func=fix_config_vars)
         # save initial state
         self._init_config_vars = copy.deepcopy(self.config_vars)
 
         # load ansible variables
-        self.ansible_vars = load_config(self.get_vars_file(), defaults={})
+        self.ansible_vars = {}
+        for fn in self.get_vars_files():
+            vars = load_config(fn, defaults={})
+            self.ansible_vars.update(vars)
         self.ansible_vars.pop('ansible_become_pass', None)
         fix_ansible_path_vars(self.ansible_vars)
         # save initial state
@@ -347,45 +437,61 @@ class Config(object):  # pylint: disable=too-many-public-methods
         del shash
         # print(shash.hexdigest(), file=sys.stderr) # DEBUG
 
-        ansible_vars_cache_fn = self.get_vars_file() + ".cache"
-
         self.ansible_vars_interpolated = None
 
-        if os.path.exists(ansible_vars_cache_fn):
-            # noinspection PyBroadException
-            try:
-                with open(ansible_vars_cache_fn, 'r') as cache_file:
-                    cache = yaml.load(cache_file, Loader=Loader)
-                cache_hash = cache["hash"]
-                cache_vars = cache["vars"]
-                if cache_hash == ansible_vars_hash:
-                    self.ansible_vars_interpolated = cache_vars
-                    LOG.info('Loaded cached variables from file: %s', ansible_vars_cache_fn)
-                else:
-                    LOG.info('Cache from file %s is invalid', ansible_vars_cache_fn)
-                del cache
+        ansible_vars_cache_fn = None
+        vars_files = []
+        vars_files.extend((fn for fn in self.get_vars_files() if fn))
+        vars_files.extend((fn for fn in self.get_vault_files() if fn))
 
-            except Exception:  # pylint: disable=broad-except
-                LOG.exception('Could not load cached variables from file: %s',
-                              ansible_vars_cache_fn)
+        if vars_files:
+            ansible_vars_cache_fn = CFG_VARS_CACHE_FILE
+
+            if os.path.exists(ansible_vars_cache_fn):
+                # noinspection PyBroadException
+                try:
+                    with open(ansible_vars_cache_fn, 'r') as cache_file:
+                        cache = yaml.load(cache_file, Loader=Loader)
+                    cache_hash = cache["hash"]
+                    cache_vars = cache["vars"]
+                    if cache_hash == ansible_vars_hash:
+                        self.ansible_vars_interpolated = cache_vars
+                        LOG.info('Loaded cached variables from file: %s', ansible_vars_cache_fn)
+                    else:
+                        LOG.info('Cache from file %s is invalid', ansible_vars_cache_fn)
+                    del cache
+
+                except Exception:  # pylint: disable=broad-except
+                    LOG.exception('Could not load cached variables from file: %s',
+                                  ansible_vars_cache_fn)
 
         # Compute interpolated variables
 
         if self.ansible_vars_interpolated is None:
-            # By default interpolated variables are equal to non-interpolated
-            self.ansible_vars_interpolated = self.ansible_vars
-            ansible_var_names = set(self.ansible_vars.keys())
-            # ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
-            #                          'ansible_private_key_file',
-            #                          'ansible_ssh_private_key_file',
-            #                          ])
-            ansible_var_names.difference_update(['ansible_become_pass'])
-            indent = "      "
-            vars_struct = ""
-            for var_name in ansible_var_names:
-                vars_struct += indent + var_name + \
-                               ': "{{ lookup(\'vars\', \'' + var_name + '\', default=\'\') }}"\n'
-            vars_tmpl = """
+            if any(os.path.exists(fn) for fn in vars_files):
+                self._compute_interpolated_ansible_vars(
+                    ansible_vars_hash=ansible_vars_hash,
+                    ansible_vars_cache_fn=ansible_vars_cache_fn)
+            else:
+                # By default interpolated variables are equal to non-interpolated
+                self.ansible_vars_interpolated = self.ansible_vars
+
+    def _compute_interpolated_ansible_vars(self, ansible_vars_hash, ansible_vars_cache_fn):
+        LOG.debug("Ansible interpolated variables missing, we will try to compute them")
+        # By default interpolated variables are equal to non-interpolated
+        self.ansible_vars_interpolated = self.ansible_vars
+        ansible_var_names = set(self.ansible_vars.keys())
+        # ansible_var_names.update(['ansible_user', 'ansible_ssh_user',
+        #                          'ansible_private_key_file',
+        #                          'ansible_ssh_private_key_file',
+        #                          ])
+        ansible_var_names.difference_update(['ansible_become_pass'])
+        indent = "      "
+        vars_struct = ""
+        for var_name in ansible_var_names:
+            vars_struct += indent + var_name + \
+                           ': "{{ lookup(\'vars\', \'' + var_name + '\', default=\'\') }}"\n'
+        vars_tmpl = """
 - hosts: 127.0.0.1
   connection: local
   gather_facts: false
@@ -404,50 +510,54 @@ class Config(object):  # pylint: disable=too-many-public-methods
         dest: "{{ CFG_DEST_FILE }}"
                                 """ % (vars_struct,)
 
-            temp_dir = tempfile.mkdtemp(prefix='cmconf-')
-            get_vars_playbook_fn = os.path.join(temp_dir, 'get_vars_pb.yaml')
-            vars_fn = os.path.join(temp_dir, 'vars.json')
-            try:
-                with open(get_vars_playbook_fn, 'w') as cache_file:
-                    cache_file.write(vars_tmpl)
+        temp_dir = tempfile.mkdtemp(prefix='cmconf-')
+        get_vars_playbook_fn = os.path.join(temp_dir, 'get_vars_pb.yaml')
+        vars_fn = os.path.join(temp_dir, 'vars.json')
+        try:
+            with open(get_vars_playbook_fn, 'w') as cache_file:
+                cache_file.write(vars_tmpl)
 
-                args = ['ansible-playbook']
-                for inventory in self.get_ansible_inventories():
-                    args.extend(['-i', inventory])
+            cmd_args = ['ansible-playbook']
+            for inventory in self.get_ansible_inventories():
+                cmd_args.extend(['-i', inventory])
 
-                self.add_ansible_vault_password_file_args(args)
-
-                if os.path.exists(self.get_vault_file()):
-                    args.extend(['--extra-vars', '@' + self.get_vault_file()])
-                if os.path.exists(self.get_vars_file()):
-                    args.extend(['--extra-vars', '@' + self.get_vars_file()])
-                args.extend(['--extra-vars', 'CFG_DEST_FILE={}'.format(shlex_quote(vars_fn)),
+            self.add_ansible_vault_password_file_args(cmd_args)
+            self.add_ansible_vault_id_args(cmd_args)
+            for fn in itertools.chain(self.get_vars_files(), self.get_vault_files()):
+                if fn and os.path.exists(fn):
+                    cmd_args.extend(['--extra-vars', '@' + fn])
+            cmd_args.extend(['--extra-vars', 'CFG_DEST_FILE={}'.format(shlex.quote(vars_fn)),
                              get_vars_playbook_fn])
-                LOG.debug("Interpolate loaded variables: %s", " ".join(args))
-                save_cache = False
+            LOG.debug("Interpolate loaded variables: %s", " ".join(cmd_args))
+            save_cache = False
+            try:
+                new_env = None
+                if self.get_ansible_config():
+                    new_env = os.environ.copy()
+                    new_env['ANSIBLE_CONFIG'] = self.get_ansible_config()
+                subprocess.check_call(cmd_args, env=new_env, stdout=DEVNULL if not self.debug_mode else sys.stderr)
+                self.ansible_vars_interpolated = load_config(vars_fn, defaults=self.ansible_vars)
+                save_cache = True
+            except subprocess.CalledProcessError:
+                LOG.exception("Could not interpolate variables")
+                LOG.debug("Failed playbook file: %s", vars_tmpl)
+            if save_cache:
+                # noinspection PyBroadException
                 try:
-                    subprocess.check_call(args, stdout=DEVNULL if not self.debug_mode else sys.stderr)
-                    self.ansible_vars_interpolated = load_config(vars_fn, defaults=self.ansible_vars)
-                    save_cache = True
-                except subprocess.CalledProcessError:
-                    LOG.exception("Could not interpolate variables")
-                if save_cache:
-                    # noinspection PyBroadException
-                    try:
-                        # Save variables to cache
-                        cache = {
-                            "hash": ansible_vars_hash,
-                            "vars": self.ansible_vars_interpolated
-                        }
+                    # Save variables to cache
+                    cache = {
+                        "hash": ansible_vars_hash,
+                        "vars": self.ansible_vars_interpolated
+                    }
 
-                        with open(ansible_vars_cache_fn, 'w') as cache_file:
-                            cache_file.write(yaml.dump(cache, Dumper=Dumper))
-                        LOG.info('Saved interpolated variables to cache file: %s', ansible_vars_cache_fn)
-                    except Exception:  # pylint: disable=broad-except
-                        LOG.exception("Could not save interpolated variables to cache")
+                    with open(ansible_vars_cache_fn, 'w') as cache_file:
+                        cache_file.write(yaml.dump(cache, Dumper=Dumper))
+                    LOG.info('Saved interpolated variables to cache file: %s', ansible_vars_cache_fn)
+                except Exception:  # pylint: disable=broad-except
+                    LOG.exception("Could not save interpolated variables to cache")
 
-            finally:
-                shutil.rmtree(temp_dir)
+        finally:
+            shutil.rmtree(temp_dir)
 
     @property
     def config_vars_changed(self):
@@ -463,7 +573,8 @@ class Config(object):  # pylint: disable=too-many-public-methods
             save_config(CONFIG_VARS_FILE, self.config_vars, do_backup=do_backup)
         if self.ansible_vars_changed:
             LOG.info('Ansible configuration changed')
-            save_config(self.get_vars_file(), self.ansible_vars, do_backup=do_backup)
+            fn = select_item('Select file to write changed ansible variables: ', self.get_vars_files())
+            save_config(fn, self.ansible_vars, do_backup=do_backup)
 
     def get_ansible_var(self, key, default=None):
         return self.ansible_vars_interpolated.get(key, default)
@@ -533,17 +644,23 @@ class Config(object):  # pylint: disable=too-many-public-methods
     def set_ansible_vault_password_files(self, value):
         self.set_config_var('CFG_ANSIBLE_VAULT_PASSWORD_FILES', to_list(value))
 
-    def get_vault_file(self):
-        return self.get_config_var('CFG_VAULT_FILE')
+    def get_ansible_vault_ids(self):
+        return self.get_config_var('CFG_ANSIBLE_VAULT_IDS', [])
 
-    def set_vault_file(self, value):
-        self.set_config_var('CFG_VAULT_FILE', value)
+    def set_ansible_vault_ids(self, value):
+        self.set_config_var('CFG_ANSIBLE_VAULT_IDS', to_list(value))
 
-    def get_vars_file(self):
-        return self.get_config_var('CFG_VARS_FILE')
+    def get_vault_files(self):
+        return self.get_config_var('CFG_VAULT_FILES', [CFG_VAULT_FILE])
 
-    def set_vars_file(self, value):
-        self.set_config_var('CFG_VARS_FILE', value)
+    def set_vault_files(self, value):
+        self.set_config_var('CFG_VAULT_FILES', to_list(value))
+
+    def get_vars_files(self):
+        return self.get_config_var('CFG_VARS_FILES', [CFG_VARS_FILE])
+
+    def set_vars_files(self, value):
+        self.set_config_var('CFG_VARS_FILES', to_list(value))
 
     def add_ansible_vault_password_file_args(self, args):
         for ansible_vault_password_file in self.get_ansible_vault_password_files():
@@ -551,10 +668,24 @@ class Config(object):  # pylint: disable=too-many-public-methods
                 args.extend(['--vault-password-file', ansible_vault_password_file])
         return args
 
+    def add_ansible_vault_id_args(self, args):
+        for ansible_vault_id in self.get_ansible_vault_ids():
+            ansible_vault_id = realpath_vault_id_if(ansible_vault_id)
+            args.extend(['--vault-id', ansible_vault_id])
+        return args
+
     def has_ansible_vault_password_file(self):
         return any(file_name and os.path.exists(file_name) for file_name in self.get_ansible_vault_password_files())
 
+    def get_user_scripts(self):
+        return self.get_config_var('CFG_USER_SCRIPTS', [])
+
+    def set_user_scripts(self, value):
+        self.set_config_var('CFG_USER_SCRIPTS', to_list(value))
+
     def print_info(self):
+        indent = ' ' * 33
+        delim = ',\n' + indent
         print("""
 Current Configuration:
 
@@ -562,24 +693,28 @@ Ansible config file:             {ANSIBLE_CONFIG}
 Ansible inventory file(s):       {CFG_ANSIBLE_INVENTORIES}
 User config directory:           {CONFIG_DIR}
 Ansible vault password file(s):  {CFG_ANSIBLE_VAULT_PASSWORD_FILES}
+Ansible vault id(s):             {CFG_ANSIBLE_VAULT_IDS}
 Ansible remote user:             {ANSIBLE_REMOTE_USER}
 Ansible private SSH key file:    {ANSIBLE_PRIVATE_KEY_FILE}
-User's ansible vars file:        {CFG_VARS_FILE}
-User's ansible vault file:       {CFG_VAULT_FILE}
+User's ansible vars file(s):     {CFG_VARS_FILES}
+User's ansible vault file(s):    {CFG_VAULT_FILES}
+User scripts:                    {CFG_USER_SCRIPTS}
 """.format(ANSIBLE_CONFIG=realpath_if(self.get_ansible_config()),
-           CFG_ANSIBLE_INVENTORIES=', '.join(array_realpath_if(self.get_ansible_inventories())),
+           CFG_ANSIBLE_INVENTORIES=delim.join(array_realpath_if(self.get_ansible_inventories())),
            CONFIG_DIR=realpath_if(CONFIG_DIR),
-           CFG_ANSIBLE_VAULT_PASSWORD_FILES=', '.join(array_realpath_if(self.get_ansible_vault_password_files())),
+           CFG_ANSIBLE_VAULT_PASSWORD_FILES=delim.join(array_realpath_if(self.get_ansible_vault_password_files())),
+           CFG_ANSIBLE_VAULT_IDS=delim.join(array_realpath_vault_id_if(self.get_ansible_vault_ids())),
            ANSIBLE_REMOTE_USER=self.get_ansible_user(default=''),
            ANSIBLE_PRIVATE_KEY_FILE=realpath_if(self.get_ansible_private_key_file(default='')),
-           CFG_VARS_FILE=realpath_if(self.get_vars_file()),
-           CFG_VAULT_FILE=realpath_if(self.get_vault_file())))
+           CFG_VARS_FILES=delim.join(array_realpath_if(self.get_vars_files())),
+           CFG_VAULT_FILES=delim.join(array_realpath_if(self.get_vault_files())),
+           CFG_USER_SCRIPTS=delim.join(array_realpath_auto_if(self.get_user_scripts()))))
 
     def print_shell_vars(self, vars_dict):
         inventory_dirs = self.get_ansible_inventory_dirs(path_separator_at_end=True)
 
         default_modifiers = EXPORT_SHELL_VARS.get(None)
-        for key, value in iteritems(vars_dict):
+        for key, value in vars_dict.items():
             modifiers = EXPORT_SHELL_VARS.get(key, default_modifiers)
             for modifier in modifiers:
                 value = modifier(value)
@@ -588,20 +723,29 @@ User's ansible vault file:       {CFG_VAULT_FILE}
                 group_vars_dir = sep_at_end(os.path.join(inventory_dir, 'group_vars'))
                 host_vars_dir = sep_at_end(os.path.join(inventory_dir, 'host_vars'))
 
-                if key in ('CFG_VARS_FILE', 'CFG_VAULT_FILE'):
-                    if value.startswith(group_vars_dir):
+                def check_vars_file(filename):
+                    if filename.startswith(group_vars_dir):
                         print('# {} variable or vault file is in group_vars inventory directory'.format(value))
-                        output_var = False
-                        break
-                    if value.startswith(host_vars_dir):
+                        return False
+                    if filename.startswith(host_vars_dir):
                         print('# {} variable or vault file is in host_vars inventory directory'.format(value))
+                        return False
+                    return True
+
+                if key in ('CFG_VARS_FILES', 'CFG_VAULT_FILES'):
+                    valid_filenames = []
+                    for filename in value:
+                        if check_vars_file(filename):
+                            valid_filenames.append(filename)
+                    if len(valid_filenames) == 0:
                         output_var = False
                         break
+                    value = valid_filenames
             if output_var:
                 if is_sequence(value):
-                    print("{}=({})".format(key, ' '.join([shlex_quote(item) for item in value])))
+                    print("{}=({})".format(key, ' '.join([shlex.quote(item) for item in value])))
                 else:
-                    print("{}={}".format(key, shlex_quote(value)))
+                    print("{}={}".format(key, shlex.quote(value)))
 
     def print_shell_config(self):
         self.print_shell_vars(self.config_vars)
@@ -614,15 +758,15 @@ User's ansible vault file:       {CFG_VAULT_FILE}
         print(yaml.dump(self.config_vars, Dumper=Dumper))
 
     def has_ansible_vault_files(self):
-        vault_fn = self.get_vault_file()
-        if vault_fn and os.path.exists(vault_fn):
-            return True
-        return False
+        return any((vault_fn and os.path.exists(vault_fn)) for vault_fn in self.get_vault_files())
 
-    def run_ansible_vault(self, command, check_call=False, stderr=None):
+    def run_ansible_vault(self, command, vault_file, extra_cmd_args=None, check_call=False, stderr=None):
         cmd_args = ['ansible-vault', command]
         self.add_ansible_vault_password_file_args(cmd_args)
-        cmd_args.append(self.get_vault_file())
+        self.add_ansible_vault_id_args(cmd_args)
+        cmd_args.append(vault_file)
+        if extra_cmd_args:
+            cmd_args.extend(extra_cmd_args)
 
         call_func = subprocess.check_call if check_call else subprocess.call
 
@@ -638,7 +782,8 @@ User's ansible vault file:       {CFG_VAULT_FILE}
         LOG.debug('ansible-vault result: %s', result)
         return result
 
-def run_command(command, env=None, cwd=None, stdin=None,   # pylint: disable=too-many-arguments
+
+def run_command(command, env=None, cwd=None, stdin=None,  # pylint: disable=too-many-arguments
                 get_stdout=True, get_stderr=True):
     """returns triple (returncode, stdout, stderr)
     if get_stdout is False stdout tuple element will be set to None
@@ -691,14 +836,213 @@ def run_command(command, env=None, cwd=None, stdin=None,   # pylint: disable=too
     return status, out, err
 
 
+ANSIBLE_VAULT_MAGIC = b'$ANSIBLE_VAULT;'
+
+
+def is_vault(filename):
+    if not os.path.exists(filename):
+        return False
+    with open(filename, 'rb') as fd:
+        s = fd.read(len(ANSIBLE_VAULT_MAGIC))
+        return s == ANSIBLE_VAULT_MAGIC
+
+
+def find_all_vaults(config):
+    found_files = set()
+    for filename in config.get_vault_files():
+        if is_vault(filename):
+            found_files.add(filename)
+            yield filename
+
+    for inventory in config.get_ansible_inventories():
+        if not os.path.isdir(inventory):
+            inventory_dir = os.path.dirname(inventory)
+        else:
+            inventory_dir = inventory
+        for root, dirs, files in os.walk(inventory_dir, topdown=False, followlinks=False):
+            for name in files:
+                filename = os.path.join(root, name)
+                if filename not in found_files and is_vault(filename):
+                    found_files.add(filename)
+                    yield filename
+
+
+def find_all_vaults_command(config, args):
+    for filename in find_all_vaults(config):
+        if args.null:
+            print(filename, end=chr(0))
+        else:
+            print(filename)
+    return 0
+
+
+def decrypt_all_vaults_command(config, args):
+    for filename in find_all_vaults(config):
+        print('Decrypting file', filename)
+        config.run_ansible_vault('decrypt', vault_file=filename, check_call=True, stderr=sys.stderr)
+    return 0
+
+
+def select_item(prompt, items, no_query_for_single_item=True):
+    if len(items) == 1 and no_query_for_single_item:
+        return items[0]
+    else:
+        for index, item in rlselect(prompt, list(items) + ['Cancel']):
+            if item == 'Cancel':
+                LOG.error('User canceled the operation')
+                return None
+            if index >= 0:
+                break
+    return item
+
+
+def view_vault_command(config, args):
+    vault_files = list(find_all_vaults(config))
+    if not vault_files:
+        LOG.error("No encrypted ansible vault files found")
+        return 1
+
+    vault_fn = select_item('Select ansible vault file to view: ', vault_files)
+    if not vault_fn:
+        return 1
+    return config.run_ansible_vault('view', vault_file=vault_fn, check_call=True)
+
+
+def decrypt_vault_command(config, args):
+    vault_files = list(find_all_vaults(config))
+    if not vault_files:
+        LOG.error("No ansible vault files found")
+        return 1
+
+    vault_fn = select_item('Select ansible vault file to decrypt: ', vault_files)
+    if not vault_fn:
+        return 1
+    return config.run_ansible_vault('decrypt', vault_file=vault_fn, check_call=True)
+
+
+def encrypt_vault_command(config, args):
+    vault_files = [filename for filename in config.get_vault_files()
+                   if (os.path.exists(filename) and not is_vault(filename))]
+    if not vault_files:
+        LOG.error("No unencrypted ansible vault files found")
+        return 1
+
+    vault_fn = select_item('Select ansible vault file to encrypt: ', vault_files)
+    if not vault_fn:
+        return 1
+    LOG.info('Encrypt vault file %s', vault_fn)
+    extra_cmd_args = []
+    encrypt_vault_id = args and getattr(args, 'encrypt_vault_id', None)
+    if not encrypt_vault_id and len(config.get_ansible_vault_ids()) > 1:
+        encrypt_vault_id = select_item('Select vault id for encryption: ', config.get_ansible_vault_ids())
+        if not encrypt_vault_id:
+            return 1
+        encrypt_vault_id = vault_id_label(encrypt_vault_id)
+    if encrypt_vault_id:
+        extra_cmd_args.append('--encrypt-vault-id')
+        extra_cmd_args.append(encrypt_vault_id)
+    return config.run_ansible_vault('encrypt', vault_file=vault_fn, extra_cmd_args=extra_cmd_args, check_call=True)
+
+
+def edit_vault_command(config, args):
+    vault_files = list(find_all_vaults(config))
+    if not vault_files:
+        if len(config.get_vault_files()) > 0:
+            LOG.warning("No configured ansible vault files exist !: %s", config.get_vault_files())
+            LOG.warning("I will create it !")
+            return create_vault_command(config, args)
+        LOG.error("No ansible vault files found")
+        return 1
+
+    vault_fn = select_item('Select ansible vault file to edit: ', vault_files)
+    if not vault_fn:
+        return 1
+    return config.run_ansible_vault('edit', vault_file=vault_fn, check_call=True)
+
+
+def create_vault_command(config, args):
+    vault_files = [filename for filename in config.get_vault_files() if not os.path.exists(filename)]
+    if not vault_files:
+        LOG.error("No ansible vault files configured")
+        return 1
+
+    if len(vault_files) == 1:
+        vault_fn = vault_files[0]
+    else:
+        for index, vault_fn in rlselect('Select ansible vault file to create: ', vault_files + ['Cancel']):
+            if vault_fn == 'Cancel':
+                LOG.error('User canceled the operation')
+                return 1
+            if index >= 0:
+                break
+    return config.run_ansible_vault('create', vault_file=vault_fn, check_call=True, stderr=sys.stderr)
+
+
+def rekey_all_vaults_command(config, args):
+    extra_cmd_args = []
+    if args.encrypt_vault_id:
+        extra_cmd_args.extend(['--encrypt-vault-id', args.encrypt_vault_id])
+    if args.new_vault_id:
+        extra_cmd_args.extend(['--new-vault-id', args.new_vault_id])
+    if args.new_vault_password_file:
+        extra_cmd_args.extend(['--new-vault-password-file', args.new_vault_password_file])
+
+    for filename in find_all_vaults(config):
+        print('Rekeying file', filename)
+        config.run_ansible_vault('rekey', vault_file=filename, extra_cmd_args=extra_cmd_args, check_call=True,
+                                 stderr=sys.stderr)
+
+    return 0
+
+
+def pwgen(pwd_file, pwd_length=20):
+    if os.path.exists(pwd_file):
+        LOG.error('File %s already exists', pwd_file)
+        return False
+    LOG.info('Generate password of length %s in the file %s', pwd_length, pwd_file)
+    with open(pwd_file, 'w') as f:
+        f.write(randpw(pwd_length))
+    return True
+
+
+def pwgen_command(args):
+    if pwgen(args.output, args.length):
+        return 0
+    else:
+        return 1
+
+
+def relpath_command(args):
+    base_path = os.path.realpath(args.base_path if args.base_path else ROOT_DIR)
+    for path in relpaths(base_path=base_path, paths=args.paths, no_parent_dirs=args.no_parent_dirs):
+        if args.null:
+            print(path, end=chr(0))
+        else:
+            print(path)
+    return 0
+
+
 def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-return-statements
     parser = argparse.ArgumentParser(description="Ansible/Kubespray configurator")
     parser.add_argument('--debug', help='debug mode', action="store_true")
     parser.add_argument('--no-backup', help='disable backup', action="store_true")
     parser.add_argument("-i", "--inventory", action='append',
                         help="specify inventory host path or comma separated host list")
-    parser.add_argument("--vault", help="set user's vault file")
-    parser.add_argument("--vars", help="set user's vars file")
+
+    parser.add_argument('--vault', default=[], dest='vault_files', help="vault file", action='append')
+    parser.add_argument('--add-vault', default=[], dest='add_vault_files', help="add vault files", action='append')
+    parser.add_argument('--remove-vault', default=[], dest='remove_vault_files', help="remove vault files",
+                        action='append')
+
+    parser.add_argument('--vars', default=[], dest='vars_files', help="vars file", action='append')
+    parser.add_argument('--add-vars', default=[], dest='add_vars_files', help="add vars files", action='append')
+    parser.add_argument('--remove-vars', default=[], dest='remove_vars_files', help="remove vars files",
+                        action='append')
+
+    parser.add_argument("--pwgen",
+                        metavar="FILE",
+                        dest="pwd_file",
+                        help="generate random password, store to file and exit")
     parser.add_argument("-u", "--user", help="set remote user")
     parser.add_argument("-r", "--reconfigure", help="reconfigure", action="store_true")
     parser.add_argument("-k", "--private-key", help="set private key filename")
@@ -719,6 +1063,54 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
                         help="add vault password files", action='append')
     parser.add_argument("--remove-vault-password-file", default=[], dest='remove_vault_password_files',
                         help="remove vault password files", action='append')
+    parser.set_defaults(func=None)
+    parser.set_defaults(func_require_config=True)
+
+    subparsers = parser.add_subparsers(title="subcommands", dest="subcommand", metavar="")
+
+    command_p = subparsers.add_parser("pwgen", help="Generate password and save to file")
+    command_p.add_argument("-o", "--output", metavar="FILE",
+                           help="password file name")
+    command_p.add_argument("-n", "--length", metavar="PASSWORD_LENGTH",
+                           type=int, default=20,
+                           help="password length")
+    command_p.set_defaults(func_require_config=False)
+    command_p.set_defaults(func=pwgen_command)
+
+    command_p = subparsers.add_parser("relpath", help="Relativize paths")
+    command_p.add_argument("-b", "--base-path",
+                           help="base path, by default path to the directory where config.yml is located")
+    command_p.add_argument("-p", "--no-parent-dirs", action="store_true",
+                           help="Use absolute paths instead of using parent directories (..)")
+    command_p.add_argument("-0", "--null", action="store_true",
+                           help='''print the full path name on the standard output, followed by a null
+    character. This allows path names that  contain newlines or other types of white space to be correctly
+    interpreted by programs that process the output. This option corresponds to the -0 option of xargs.''')
+    command_p.add_argument("paths", metavar="PATH", nargs='+', help="path to relativize")
+    command_p.set_defaults(func_require_config=False)
+    command_p.set_defaults(func=relpath_command)
+
+    command_p = subparsers.add_parser("find-all-vaults", help="find all vault files")
+    command_p.add_argument("-0", "--null", action="store_true",
+                           help='''print the full file name on the standard output, followed by a null
+    character. This allows file names that  contain newlines or other types of white space to be correctly
+    interpreted by programs that process the output. This option corresponds to the -0 option of xargs.''')
+    command_p.set_defaults(func=find_all_vaults_command)
+
+    command_p = subparsers.add_parser("decrypt-all-vaults", help="decrypt all vault files")
+    command_p.set_defaults(func=decrypt_all_vaults_command)
+
+    command_p = subparsers.add_parser("encrypt-vault", help="encrypt vault file")
+    command_p.add_argument("--encrypt-vault-id", help="the vault id used to encrypt (required if more than vault-id "
+                                                      "is provided)")
+    command_p.set_defaults(func=encrypt_vault_command)
+
+    command_p = subparsers.add_parser("rekey-vaults", help="rekey all vault files")
+    command_p.add_argument("--encrypt-vault-id",
+                           help="the vault id used to encrypt (required if more than vault-id is provided)")
+    command_p.add_argument("--new-vault-id", help="the new vault identity to use for rekey")
+    command_p.add_argument("--new-vault-password-file", help="new vault password file for rekey")
+    command_p.set_defaults(func=rekey_all_vaults_command)
 
     args = parser.parse_args()
 
@@ -731,6 +1123,15 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
         logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
                             level=logging.INFO if not show_config else logging.WARNING)
 
+    if args.func is not None and not args.func_require_config:
+        return args.func(args=args)
+
+    if args.pwd_file:
+        if pwgen(args.pwd_file):
+            return 0
+        else:
+            return 1
+
     # Check for ansible tools
     tool_not_found = False
     for tool in ('ansible', 'ansible-vault', 'ansible-playbook', 'ansible-inventory'):
@@ -741,17 +1142,40 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
     if tool_not_found:
         LOG.error("Some Ansible tools were not found in PATH environment variable, either Ansible was not installed "
                   "or it was not added to PATH.")
-        LOG.error("PATH: %s", os.environ["PATH"])
+        LOG.error("PATH: %s", os.getenv("PATH", None))
         return 1
 
+    # Load configuration
     config = Config(debug_mode=args.debug)
+
+    if args.func is not None:
+        return args.func(config=config, args=args)
 
     if not args.inventory:
         args.inventory = array_realpath_if(config.get_ansible_inventories())
-    if not args.vault:
-        args.vault = realpath_if(config.get_vault_file())
-    if not args.vars:
-        args.vars = realpath_if(config.get_vars_file())
+
+    if not args.vars_files:
+        args.vars_files = config.get_vars_files()
+    if args.remove_vars_files:
+        for item in args.remove_vars_files:
+            if item in args.vars_files:
+                args.vars_files.remove(item)
+    if args.add_vars_files:
+        for item in args.add_vars_files:
+            if item not in args.vars_files:
+                args.vars_files.append(item)
+
+    if not args.vault_files:
+        args.vault_files = config.get_vault_files()
+    if args.remove_vault_files:
+        for item in args.remove_vault_files:
+            if item in args.vault_files:
+                args.vault_files.remove(item)
+    if args.add_vault_files:
+        for item in args.add_vault_files:
+            if item not in args.vault_files:
+                args.vault_files.append(item)
+
     if not args.user:
         args.user = config.get_ansible_user()
     if not args.private_key:
@@ -782,49 +1206,16 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
     readline.parse_and_bind("tab: complete")
 
     if args.view_vault:
-        vault_fn = config.get_vault_file()
-        if not vault_fn:
-            LOG.error("No ansible vault file is configured")
-            return 1
-        if not os.path.exists(vault_fn):
-            LOG.error("Ansible vault file %s doesn't exist !", vault_fn)
-            LOG.error("Run --edit-vault command.")
-            return 1
-        return config.run_ansible_vault('view', check_call=True)
+        return view_vault_command(config, args)
 
     if args.decrypt_vault:
-        vault_fn = config.get_vault_file()
-        if not vault_fn:
-            LOG.error("No ansible vault file is configured")
-            return 1
-        if not os.path.exists(vault_fn):
-            LOG.error("Ansible vault file %s doesn't exist !", vault_fn)
-            LOG.error("Run --edit-vault command.")
-            return 1
-        return config.run_ansible_vault('decrypt', check_call=True)
+        return decrypt_vault_command(config, args)
 
     if args.encrypt_vault:
-        vault_fn = config.get_vault_file()
-        if not vault_fn:
-            LOG.error("No ansible vault file is configured")
-            return 1
-        if not os.path.exists(vault_fn):
-            LOG.error("Ansible vault file %s doesn't exist !", vault_fn)
-            LOG.error("Run --edit-vault command.")
-            return 1
-        return config.run_ansible_vault('encrypt', check_call=False, stderr=DEVNULL)
+        return encrypt_vault_command(config, args)
 
     if args.edit_vault:
-        vault_fn = config.get_vault_file()
-        if not vault_fn:
-            LOG.error("No ansible vault file is configured")
-            return 1
-        if not os.path.exists(vault_fn):
-            LOG.warning("Ansible vault file %s doesn't exist !", vault_fn)
-            LOG.warning("I will create it !")
-            return config.run_ansible_vault('create', check_call=True)
-        else:
-            return config.run_ansible_vault('edit', check_call=True)
+        return edit_vault_command(config, args)
 
     if not os.path.isdir(CONFIG_DIR):
         LOG.info('Create directory: %r', CONFIG_DIR)
@@ -863,15 +1254,15 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
             config.set_ansible_vault_password_files(args.vault_password_files)
             LOG.info('Set ansible vault password files to %r', args.vault_password_files)
 
-    if args.vault:
-        if realpath_if(args.vault) != realpath_if(config.get_vault_file()):
-            config.set_vault_file(args.vault)
-            LOG.info("Set user's ansible vault file to %r", args.vault)
+    if args.vault_files:
+        if array_realpath_if(args.vault_files) != array_realpath_if(config.get_vault_files()):
+            config.set_vault_files(args.vault_files)
+            LOG.info("Set user's ansible vault files to %r", args.vault_files)
 
-    if args.vars:
-        if realpath_if(args.vars) != realpath_if(config.get_vars_file()):
-            config.set_vars_file(args.vars)
-            LOG.info("Set user's ansible vars file to %r", args.vars)
+    if args.vars_files:
+        if array_realpath_if(args.vars_files) != array_realpath_if(config.get_vars_files()):
+            config.set_vars_files(args.vars_files)
+            LOG.info("Set user's ansible vars files to %r", args.vars_files)
 
     if args.reconfigure:
         count = 0
@@ -889,12 +1280,18 @@ def main():  # pylint: disable=too-many-branches,too-many-statements,too-many-re
         vault_data = {
             "ansible_become_pass": sudo_pass_1
         }
-        with open(config.get_vault_file(), 'w') as vault_file:
+        vault_filename = select_item('Select vault file to write password to: ', config.get_vault_files())
+        if vault_filename is None:
+            return 1
+        with open(vault_filename, 'w') as vault_file:
             vault_file.write(yaml.dump(vault_data, Dumper=Dumper))
-        LOG.info('Wrote sudo password to vault file')
+        LOG.info('Wrote sudo password to vault file: %s', vault_filename)
 
-    if os.path.exists(config.get_vault_file()):
-        config.run_ansible_vault('encrypt', check_call=False, stderr=DEVNULL)
+    for vault_filename in config.get_vault_files():
+        if not is_vault(vault_filename):
+            LOG.warning('Vault file {} is configured, but not encrypted ! Execute the command "ansible-vault encrypt" '
+                        'to encrypt it !'.format(vault_filename))
+            # config.run_ansible_vault('encrypt', check_call=False, stderr=DEVNULL)
 
     config.save(do_backup=not args.no_backup)
 

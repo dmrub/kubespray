@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Based on https://serverfault.com/questions/661978/displaying-a-remote-ssl-certificate-details-using-cli-tools
 

@@ -61,3 +61,7 @@
       file:
         path: "/tmp/etcd-backup-{{ inventory_hostname }}.tar.gz"
         state: absent
+
+    - name: Print backup file
+      debug:
+        msg: "Etcd backup is stored in file {{ etcd_backup_dir }}/etcd-backup-{{ inventory_hostname }}.tar.gz"
