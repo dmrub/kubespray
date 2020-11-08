@@ -158,7 +158,7 @@ def load_config(file_name, defaults=None, fix_config_vars_func=None):
     if os.path.exists(file_name):
         # noinspection PyBroadException
         try:
-            with open(file_name, 'r') as config_vars_file:
+            with open(file_name, 'r', encoding='utf-8') as config_vars_file:
                 config_vars = yaml.load(config_vars_file, Loader=Loader)
             if config_vars is None:
                 config_vars = {}
