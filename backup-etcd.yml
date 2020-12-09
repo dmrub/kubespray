@@ -17,8 +17,6 @@
     - import_tasks: roles/etcd/handlers/backup.yml
   tasks:
 
-    # - import_tasks: roles/etcd/tasks/set_cluster_health.yml
-
     - name: Configure | Check if etcd cluster is healthy  # noqa 306
       shell: "{{ bin_dir }}/etcdctl endpoint --cluster status && {{ bin_dir }}/etcdctl endpoint --cluster health  2>&1 | grep -q -v 'Error: unhealthy cluster'"
       register: etcd_cluster_is_healthy
@@ -46,22 +44,40 @@
     - debug:
         var: etcd_backup_directory
 
+    - name: Create temporary backup directory
+      tempfile:
+        state: directory
+        suffix: _etcd_backup
+      register: etcd_tmp_backup_dir
+
+    - name: Set backup file name
+      set_fact:
+        backup_file_name: >-
+          {{ 'etcd-backup-%s-%s.tar.gz' |
+          format(inventory_hostname,
+          lookup('pipe', 'date +%Y%m%d-%H%M') | trim)
+          }}
+
     - name: Create etcd backup tarball
-      command: "tar -cvzf /tmp/etcd-backup-{{ inventory_hostname }}.tar.gz -C {{ etcd_backup_directory }} ."
+      command: >-
+        tar -cvf {{ etcd_tmp_backup_dir.path | quote }}/{{ backup_file_name | quote }}
+        -C {{ etcd_backup_directory }} .
+      args:
+        warn: false
 
     - name: Copy etcd backup tarball to ansible host
       fetch:
-        src: "/tmp/etcd-backup-{{ inventory_hostname }}.tar.gz"
-        dest: "{{ etcd_backup_dir }}/etcd-backup-{{ inventory_hostname }}.tar.gz"
+        src: "{{ etcd_tmp_backup_dir.path }}/{{ backup_file_name }}"
+        dest: "{{ etcd_backup_dir }}/{{ backup_file_name }}"
         flat: yes
         validate_checksum: no
-      become: no
 
-    - name: Remove etcd backup tarball
+    - name: Remove temporary backup directory {{ etcd_tmp_backup_dir.path }}
       file:
-        path: "/tmp/etcd-backup-{{ inventory_hostname }}.tar.gz"
+        path: "{{ etcd_tmp_backup_dir.path }}"
         state: absent
 
     - name: Print backup file
       debug:
-        msg: "Etcd backup is stored in file {{ etcd_backup_dir }}/etcd-backup-{{ inventory_hostname }}.tar.gz"
+        msg: "Etcd backup is stored in file {{ etcd_backup_dir }}/{{ backup_file_name }}"
+
