@@ -3,20 +3,27 @@
 
 ---
 
-- name: docker | Configure Debian-based distributions
-  shell: |
+- name: docker | Install required packages for Debian-based distributions
+  shell: >-
     set -xe;
+    apt-get update -y;
     apt-get install -y \
       apt-transport-https \
       ca-certificates \
       curl \
       gnupg-agent \
       software-properties-common;
+  become: yes
+  when: ansible_os_family == 'Debian'
+
+- name: docker | Configure Debian-based distributions
+  shell: |
+    set -xe;
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
       sudo apt-key add -;
     echo "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
       sudo tee /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list;
-    sudo apt-get update;
+    apt-get update -y;
   args:
     creates: /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
   become: yes
@@ -120,6 +127,7 @@
 
 - debug:
     var: result.stdout_lines
+  when: result.stdout_lines is defined
 
 - name: Ensures /etc/docker directory exists
   file:
