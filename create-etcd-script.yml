@@ -1,0 +1,46 @@
+---
+- hosts: "{{ groups['etcd'] | first }}"
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  tags:
+    - etcd
+  roles:
+    - { role: kubespray-defaults}
+  vars_files:
+    - roles/etcd/defaults/main.yml
+  handlers:
+    - import_tasks: roles/etcd/handlers/backup.yml
+  tasks:
+
+    - name: Create etcdctl.sh script
+      become: true
+      copy:
+        dest: "{{ bin_dir }}/etcdctl.sh"
+        content: |
+          #!/bin/bash
+          export ETCDCTL_CERT_FILE="{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}.pem"
+          export ETCDCTL_KEY_FILE="{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}-key.pem"
+          export ETCDCTL_CA_FILE="{{ etcd_cert_dir }}/ca.pem"
+          export ETCDCTL_ENDPOINTS="{{ etcd_access_addresses }}"
+          {{ bin_dir | quote }}/etcdctl "$@"
+        mode: 0755
+
+    - name: Create etcdctl3.sh script
+      become: true
+      copy:
+        dest: "{{ bin_dir }}/etcdctl3.sh"
+        content: |
+          #!/bin/bash
+          export ETCDCTL_API=3
+          export ETCDCTL_CERT="{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}.pem"
+          export ETCDCTL_KEY="{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}-key.pem"
+          export ETCDCTL_CACERT="{{ etcd_cert_dir }}/ca.pem"
+          export ETCDCTL_ENDPOINTS="{{ etcd_access_addresses }}"
+          {{ bin_dir | quote }}/etcdctl "$@"
+        mode: 0755
+
+    - name: Print script locations
+      debug:
+        msg:
+          - "etcdctl.sh script is in {{ bin_dir }}/etcdctl.sh"
+          - "etcdctl3.sh script is in {{ bin_dir }}/etcdctl3.sh"
