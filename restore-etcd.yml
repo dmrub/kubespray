@@ -1,0 +1,189 @@
+# Based on roles/recover_control_plane/etcd/tasks/recover_lost_quorum.yml
+- hosts: "{{ groups['etcd'] | first }}"
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  tags:
+    - etcd
+  roles:
+    - { role: kubespray-defaults}
+  vars_prompt:
+    - name: etcd_backup_file
+      prompt: "Etcd backup file"
+      private: no
+  vars:
+    etcd_restore_dir: "/tmp/etcd_snapshots"
+  vars_files:
+    - roles/etcd/defaults/main.yml
+  handlers:
+    - import_tasks: roles/etcd/handlers/backup.yml
+  tasks:
+
+    - name: Get backup file hashsum
+      become: false
+      stat:
+        path: "{{ etcd_backup_file }}"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      register: etcd_backup_file_stat
+
+    - name: Stop if backup file not found
+      fail:
+        msg: "File {{ etcd_backup_file }} does not exist"
+      when: not etcd_backup_file_stat.stat.exists
+
+    - name: Create temporary etcd restore directory
+      block:
+
+      - name: Create temporary restore directory
+        tempfile:
+          state: directory
+          suffix: _etcd_restore
+        register: etcd_tmp_restore_dir
+
+      - name: Set directory variable
+        set_fact:
+          etcd_restore_dir: "{{ etcd_tmp_restore_dir.path }}"
+
+      when: (etcd_restore_dir | default('')) | length == 0
+
+    - name: Set unique directory name if directory is not temporary
+      set_fact:
+        etcd_restore_dir: "{{ etcd_restore_dir }}/{{ etcd_backup_file_stat.stat.checksum }}"
+      when: etcd_tmp_restore_dir.path is not defined
+
+    - name: Create restore directory and fix permissions if needed
+      file:
+        path: "{{ etcd_restore_dir }}"
+        state: directory
+        mode: u=rwx,g-rwx,o-rwx
+
+    - name: Set filename variables
+      set_fact:
+        etcd_backup_file_path: "{{ etcd_restore_dir }}/{{ etcd_backup_file_bn }}"
+        etcd_backup_extracted_path: "{{ etcd_restore_dir }}/extracted"
+        etcd_backup_file_bn: "{{ etcd_backup_file_bn }}"
+      vars:
+        etcd_backup_file_bn: "{{ etcd_backup_file | basename }}"
+
+    - name: Print file backup file
+      debug:
+        msg: "Copy local backup file {{ etcd_backup_file }} to remote {{ inventory_hostname }}:{{ etcd_backup_file_path }}"
+
+    - name: Copy backup file to the restore directory
+      copy:
+        src: "{{ etcd_backup_file }}"
+        dest: "{{ etcd_backup_file_path }}"
+
+    - name: Extract files if backup file is not a snapshot
+      block:
+      - name: Create extraction directory
+        file:
+          path: "{{ etcd_backup_extracted_path }}"
+          state: directory
+          mode: u=rwx,g-rwx,o-rwx
+
+      - name: Extract files in the archive
+        unarchive:
+          src: "{{ etcd_backup_file_path }}"
+          dest: "{{ etcd_backup_extracted_path }}"
+          mode: '0755'
+          remote_src: yes
+
+      - name: Find snapshot file
+        find:
+          paths: "{{ etcd_backup_extracted_path }}"
+          patterns: "snapshot.db"
+          file_type: file
+        register: snapshot_files
+
+      - name: Stop if no files found
+        fail:
+          msg: "No snapshot.db file found in the extracted archive {{ etcd_backup_file }}"
+        when: snapshot_files.matched == 0
+
+      - name: Print found snapshot
+        debug:
+          var: snapshot_files.files[0].path
+
+      - name: Set snapshot file path
+        set_fact:
+          snapshot_file_path: "{{ snapshot_files.files[0].path }}"
+
+      when: etcd_backup_file_bn != 'snapshot.db'
+
+    - name: Set snapshot file path if backup file is a snapshot
+      set_fact:
+        snapshot_file_path: "{{ etcd_backup_file_path }}"
+      when: etcd_backup_file_bn == 'snapshot.db'
+
+    - name: Set temporary file name for the etcd_data_dir
+      set_fact:
+        backup_etcd_data_dir: >-
+          {{ '%s.%s.bak' |
+          format(etcd_data_dir, lookup('pipe', 'date +%Y%m%d-%H%M') | trim)
+          }}
+
+    - name: Stop etcd
+      systemd:
+        name: etcd
+        state: stopped
+
+    - name: Move etcd_data_dir
+      command: mv {{ etcd_data_dir | quote }} {{ backup_etcd_data_dir | quote }}
+      args:
+        creates: "{{ backup_etcd_data_dir }}"
+        removes: "{{ etcd_data_dir }}"
+
+    - name: Restore etcd snapshot
+      shell: >-
+        {{ bin_dir }}/etcdctl snapshot restore {{ snapshot_file_path | quote }}
+        --name {{ etcd_member_name }} --initial-cluster {{ etcd_member_name }}={{ etcd_peer_url }}
+        --initial-cluster-token k8s_etcd --initial-advertise-peer-urls {{ etcd_peer_url }}
+        --data-dir {{ etcd_data_dir }}
+      environment:
+        - ETCDCTL_API: 3
+        - ETCDCTL_CA_FILE: /etc/ssl/etcd/ssl/ca.pem
+        - ETCDCTL_CERT: "/etc/ssl/etcd/ssl/member-{{ inventory_hostname }}.pem"
+        - ETCDCTL_KEY: "/etc/ssl/etcd/ssl/member-{{ inventory_hostname }}-key.pem"
+
+    - name: Change etcd data-dir owner
+      file:
+        path: "{{ etcd_data_dir }}"
+        owner: etcd
+        group: etcd
+        recurse: true
+
+    - name: Start etcd
+      systemd:
+        name: etcd
+        state: started
+
+    - name: Configure | Check if etcd cluster is healthy
+      shell: "{{ bin_dir }}/etcdctl --endpoints={{ etcd_access_addresses }} cluster-health | grep -q 'cluster is healthy'"
+      register: etcd_cluster_is_healthy
+      changed_when: false
+      check_mode: no
+      when: is_etcd_master
+      environment:
+        ETCDCTL_CERT_FILE: "{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}.pem"
+        ETCDCTL_KEY_FILE: "{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}-key.pem"
+        ETCDCTL_CA_FILE: "{{ etcd_cert_dir }}/ca.pem"
+      retries: 3
+      delay: 3
+      until: etcd_cluster_is_healthy.rc == 0
+
+    - name: Remove extracted directory
+      file:
+        path: "{{ etcd_backup_extracted_path }}"
+        state: absent
+      when: etcd_backup_extracted_path is defined
+
+    - name: Remove temporary backup directory
+      file:
+        path: "{{ etcd_tmp_restore_dir.path }}"
+        state: absent
+      when: etcd_tmp_restore_dir.path is defined
+
+    - name: Print backup etcd data directory
+      debug:
+        msg: "Previous etcd data directory is moved to {{ backup_etcd_data_dir }}"
