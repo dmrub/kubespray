@@ -7,4 +7,4 @@ source "$THIS_DIR/init-env.sh"
 
 set -e
 
-run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/rotate-tokens.yml" "$@"
+run-ansible-playbook "$ANSIBLE_PLAYBOOKS_DIR/rotate-tokens.yml" --become --become-user=root "$@"
