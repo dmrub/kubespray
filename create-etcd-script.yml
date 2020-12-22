@@ -1,4 +1,7 @@
 ---
+- name: Check ansible version
+  import_playbook: ansible_version.yml
+
 - hosts: "{{ groups['etcd'] | first }}"
   any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
   become: true
@@ -18,6 +21,7 @@
         dest: "{{ bin_dir }}/etcdctl.sh"
         content: |
           #!/bin/bash
+          export ETCDCTL_API=2
           export ETCDCTL_CERT_FILE="{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}.pem"
           export ETCDCTL_KEY_FILE="{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}-key.pem"
           export ETCDCTL_CA_FILE="{{ etcd_cert_dir }}/ca.pem"
