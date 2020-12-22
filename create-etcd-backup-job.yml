@@ -1,0 +1,179 @@
+# https://labs.consol.de/kubernetes/2018/05/25/kubeadm-backup.html
+- hosts: kube-master[0]
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  roles:
+    - { role: kubespray-defaults}
+  vars:
+    job_name: etcd-backup
+    job_namespace: etcd-backup
+    persistent_volume_claim: "etcd-backup"
+    persistent_volume: "etcd-backup"
+    persistent_volume_size: "100Mi"
+    persistent_volume_access_mode: "ReadWriteMany"
+    cron_schedule: "0 */1 * * *" # At minute 0 past every hour
+    # cron_schedule: "*/1 * * * *" # At every minute
+    max_days: 2
+  tasks:
+
+    - name: Create namespace
+      shell: >-
+        {{ bin_dir }}/kubectl --kubeconfig /etc/kubernetes/admin.conf get namespace {{ job_namespace }} ||
+        {{ bin_dir }}/kubectl --kubeconfig /etc/kubernetes/admin.conf create namespace {{ job_namespace }}
+      register: kubectl
+      changed_when: false
+      until: kubectl.rc == 0
+      delay: 4
+      retries: 10
+
+    - name: Debug
+      debug:
+        var: kubectl
+
+    - name: Create temporary directory for configuration files
+      tempfile:
+        state: directory
+        suffix: _k8s
+      register: k8s_tmp_dir
+
+    - name: Create NFS PVC and PV
+      when: nfs_server is defined and nfs_path is defined
+      block:
+
+      - name: Generate NFS PVC and PV file
+        copy:
+          dest: "{{ k8s_tmp_dir.path }}/etcd-pv.yaml"
+          content: |
+            ---
+            apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata:
+              name: {{ persistent_volume_claim | to_json }}
+              namespace: {{ job_namespace | to_json }}
+            spec:
+              storageClassName: "" # Empty string must be explicitly set otherwise default StorageClass will be set
+              volumeName: {{ persistent_volume | to_json }}
+              accessModes:
+                - {{ persistent_volume_access_mode | to_json }}
+              resources:
+                requests:
+                  storage: {{ persistent_volume_size | to_json }}
+            ---
+            apiVersion: v1
+            kind: PersistentVolume
+            metadata:
+              name: etcd-backup
+            spec:
+              storageClassName: ""
+              capacity:
+                storage: {{ persistent_volume_size | to_json }}
+              accessModes:
+                - {{ persistent_volume_access_mode | to_json }}
+              nfs:
+                server: {{ nfs_server | to_json }}
+                path: {{ nfs_path | to_json }}
+              claimRef:
+                name: {{ persistent_volume_claim | to_json }}
+                namespace: {{ job_namespace | to_json }}
+
+      - name: Create PVC and PV resources with kubectl
+        shell: >-
+          {{ bin_dir }}/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "{{ k8s_tmp_dir.path }}/etcd-pv.yaml"
+        register: kubectl
+        until: kubectl.rc == 0
+        delay: 4
+        retries: 10
+
+    - name: Create job file
+      copy:
+        dest: "{{ k8s_tmp_dir.path }}/etcd-backup-job.yaml"
+        content: |
+          apiVersion: batch/v1beta1
+          kind: CronJob
+          metadata:
+            name: {{ job_name | to_json }}
+            namespace: {{ job_namespace | to_json }}
+          spec:
+            schedule: {{ cron_schedule | to_json }}
+            concurrencyPolicy: Forbid
+            jobTemplate:
+              spec:
+                template:
+                  spec:
+                    nodeSelector:
+                      node-role.kubernetes.io/master: ""
+                    tolerations:
+                    - effect: NoSchedule
+                      operator: Exists
+                    containers:
+                    - name: etcd
+                      image: "{{ etcd_image_repo }}:{{ etcd_image_tag }}"
+                      imagePullPolicy: IfNotPresent
+                      env:
+                      - name: ETCDCTL_API
+                        value: "3"
+                      - name: ETCDCTL_CERT
+                        value: "{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}.pem"
+                      - name: ETCDCTL_KEY
+                        value: "{{ etcd_cert_dir }}/admin-{{ inventory_hostname }}-key.pem"
+                      - name: ETCDCTL_CACERT
+                        value: "{{ etcd_cert_dir }}/ca.pem"
+                      - name: ETCDCTL_ENDPOINTS
+                        value: "{{ etcd_access_addresses }}"
+                      command:
+                        - sh
+                        - -c
+                        - >-
+                          set -xe;
+                          etcdctl endpoint --cluster status;
+                          etcdctl endpoint --cluster health;
+                          mkdir -p /var/backup/etcd;
+                          find /var/backup/etcd -name "etcd-snapshot-*.db" -type f -mtime +{{ max_days }} -exec rm {} \; ;
+                          etcdctl snapshot save /var/backup/etcd/etcd-snapshot-$(date +%Y%m%d-%H%M%S-%Z).db;
+                          ls -la /var/backup/etcd;
+                      volumeMounts:
+                      - name: etc-ssl-certs
+                        mountPath: "/etc/ssl/certs"
+                        readOnly: true
+                      - name: etc-ssl-etcd-ssl
+                        mountPath: "/etc/ssl/etcd/ssl"
+                        readOnly: true
+                      - name: var-lib-etcd
+                        mountPath: "/var/lib/etcd"
+                        readOnly: true
+                      - name: localtime
+                        mountPath: "/etc/localtime"
+                      - name: backup-volume
+                        mountPath: "/var/backup"
+                    restartPolicy: OnFailure
+                    volumes:
+                      - name: etc-ssl-certs
+                        hostPath:
+                          path: "/etc/ssl/certs"
+                          type: Directory
+                      - name: etc-ssl-etcd-ssl
+                        hostPath:
+                          path: "/etc/ssl/etcd/ssl"
+                          type: Directory
+                      - name: var-lib-etcd
+                        hostPath:
+                          path: "/var/lib/etcd"
+                          type: Directory
+                      - name: localtime
+                        hostPath:
+                          path: /etc/localtime
+                      - name: backup-volume
+                        persistentVolumeClaim:
+                          claimName: {{ persistent_volume_claim | to_json }}
+                backoffLimit: 4
+
+    - name: Create job
+      shell: >-
+        {{ bin_dir }}/kubectl --kubeconfig /etc/kubernetes/admin.conf delete -f "{{ k8s_tmp_dir.path }}/etcd-backup-job.yaml" || true;
+        {{ bin_dir }}/kubectl --kubeconfig /etc/kubernetes/admin.conf create --record=true -f "{{ k8s_tmp_dir.path }}/etcd-backup-job.yaml";
+      register: kubectl
+
+    - name: Remove temporary directory {{ k8s_tmp_dir.path }}
+      file:
+        path: "{{ k8s_tmp_dir.path }}"
+        state: absent
