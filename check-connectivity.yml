@@ -1,9 +1,15 @@
-- hosts: localhost
-  connection: local
+- hosts: kube-master[0]
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  become: true
+  roles:
+    - { role: kubespray-defaults}
   tasks:
 
     - name: Run kubectl
-      shell: "{{ playbook_dir }}/bin/kubectl.sh get svc -n {{ netcheck_namespace | default('default') }} netchecker-service -o go-template  --template {% raw %}'{{ range .spec.ports}}{{ .nodePort }} {{ end }}'{% endraw %}"
+      shell: >-
+        {{ bin_dir }}/kubectl --kubeconfig /etc/kubernetes/admin.conf get svc
+        -n {{ netcheck_namespace | default('default') }} netchecker-service
+        -o go-template  --template {% raw %}'{{ range .spec.ports}}{{ .nodePort }} {{ end }}'{% endraw %}
       changed_when: False
       failed_when: "kubectl_output.stdout.split() | length == 0"
       register: kubectl_output
