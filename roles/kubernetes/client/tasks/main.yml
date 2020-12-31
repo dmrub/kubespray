@@ -70,6 +70,16 @@
     admin_kubeconfig: "{{ raw_admin_kubeconfig.stdout | from_yaml }}"
   when: kubeconfig_localhost
 
+- name: Override server in kubeconfig
+  set_fact:
+    admin_kubeconfig: "{{ admin_kubeconfig | combine(override_clusters, recursive=True) }}"
+  vars:
+    override_clusters: "{{ { 'clusters': [ admin_kubeconfig_cluster | combine(override_cluster_server, recursive=True) ] } }}"
+    override_cluster_server: "{{ { 'cluster': { 'server': override_server_url } } }}"
+    override_server_url: "https://{{ kube_external_apiserver_address|string }}:{{ kube_external_apiserver_port|string }}"
+    admin_kubeconfig_cluster: "{{ admin_kubeconfig['clusters'][0] }}"
+  when: kubeconfig_localhost and kube_external_apiserver_address is defined and kube_external_apiserver_port is defined
+
 - name: Override username in kubeconfig
   set_fact:
     final_admin_kubeconfig: "{{ admin_kubeconfig | combine(override_cluster_name, recursive=true) | combine(override_context, recursive=true) | combine(override_user, recursive=true) }}"
